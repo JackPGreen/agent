@@ -1,0 +1,377 @@
+name: Build and test
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+      - labeled
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+
+# Cancel any running jobs for PRs on a new commit
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  get-meta:
+    name: Get meta information required for the build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      build-type: ${{ steps.set-build-type.outputs.build-type }}
+      date: ${{ steps.set-meta.outputs.date }}
+      linux-targets: ${{ steps.set-meta.outputs.linux-targets }}
+      kind-versions: ${{ steps.set-meta.outputs.kind-versions }}
+      version: ${{ steps.set-version.outputs.version }}
+      oss-version: ${{ steps.set-oss-version.outputs.oss-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Debug
+        uses: raven-actions/debug@v1
+
+      - name: Simple variable for type of build, i.e. release or staging
+        id: set-build-type
+        run: |
+          echo "Running build of type: $BUILD_TYPE"
+          echo "build-type=$BUILD_TYPE" >> $GITHUB_OUTPUT
+        shell: bash
+        env:
+          BUILD_TYPE: ${{ github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/') && 'release' || 'staging' }}
+
+      - name: Get current date for nightly build info
+        id: set-date
+        run: |
+          if [[ '${{ steps.set-build-type.outputs.build-type }}' == 'release' ]]; then
+              echo "date=" >> $GITHUB_OUTPUT
+          else
+              echo "date=$(date '+%Y-%m-%d-%H_%M_%S')" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Get the versions to use
+        # Look for the default line in the Dockerfile
+        id: set-version
+        run: |
+          VERSION=$(grep "ARG FLUENTDO_AGENT_VERSION=" Dockerfile.ubi | cut -d '=' -s -f 2 -)
+          # For releases we use the tag
+          if [[ '${{ steps.set-build-type.outputs.build-type }}' == 'release' ]]; then
+              TAG_NAME=${GITHUB_REF#refs/tags/}
+              echo "Found tag: $TAG_NAME"
+              # Strip first character
+              VERSION=${TAG_NAME:1}
+          fi
+          echo "Using version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ (github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/') && github.ref_name) || '' }}
+
+      - name: Extract the configuration from the JSON file
+        # Read from the file and remove newline characters: https://stackoverflow.com/a/64627966
+        id: set-meta
+        run: |
+          LINUX_TARGETS=$(cat "$JSON_FILE_NAME"|jq -c .linux_targets )
+          echo "linux-targets=$LINUX_TARGETS"
+          echo "linux-targets=$LINUX_TARGETS" >> $GITHUB_OUTPUT
+
+          KIND_VERSIONS=$(cat "$JSON_FILE_NAME"|jq -c .kind_versions )
+          echo "kind-versions=$KIND_VERSIONS"
+          echo "kind-versions=$KIND_VERSIONS" >> $GITHUB_OUTPUT
+        shell: bash
+        env:
+          JSON_FILE_NAME: build-config.json
+
+      - name: Get the OSS version
+        # Read from the file and remove newline characters: https://stackoverflow.com/a/64627966
+        id: set-oss-version
+        run: |
+          OSS_VERSION=$(cat source/oss_version.txt)
+          echo "oss-version=$OSS_VERSION"
+          echo "oss-version=$OSS_VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+  build-image:
+    uses: ./.github/workflows/call-build-containers.yaml
+    needs:
+      - get-meta
+    strategy:
+      fail-fast: false
+      matrix:
+        image-base:
+          - "ghcr.io/fluentdo/agent"
+          - "ghcr.io/fluentdo/agent/ubi"
+          - "ghcr.io/fluentdo/agent/debian"
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      image-base: ${{ matrix.image-base }}
+
+      # Pick the Dockerfile to use for each image
+      definition: ${{ (contains(matrix.image-base, 'debian') && 'Dockerfile.debian') || 'Dockerfile.ubi' }}
+
+  test_kubernetes:
+    # Only run Kubernetes tests if we are not a pull request or have a label set
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration-tests') }}
+    uses: ./.github/workflows/call-test-containers.yaml
+    with:
+      kind-version: ${{ matrix.kind-version }}
+      image: ${{ matrix.image-base }}
+      image-tag: ${{ needs.build-image.outputs.version }}
+      ref: ${{ github.ref }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+    needs:
+      - get-meta
+      - build-image
+    permissions:
+      packages: read
+      contents: read
+    strategy:
+      # We want all tests to complete in case it is an issue just on one version.
+      fail-fast: false
+      matrix:
+        kind-version: ${{ fromJson(needs.get-meta.outputs.kind-versions) }}
+        image-base:
+          - "ghcr.io/fluentdo/agent"
+
+  build-linux:
+    # Only build Linux packages if we are not a pull request or have a label set
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') }}
+    uses: ./.github/workflows/call-build-linux-packages.yaml
+    needs:
+      - get-meta
+    with:
+      ref: ${{ github.ref }}
+      target-matrix: ${{ needs.get-meta.outputs.linux-targets }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
+
+  # runs for every commit except only versioned releases are pushed. this allows dry running the job for every PR and
+  # allows dependent downstream jobs to dry run as well.
+  release:
+    name: Create release
+    needs:
+      - get-meta
+      - build-image
+      - build-linux
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      actions: read
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all artefacts
+        uses: actions/download-artifact@v5
+        with:
+          path: output
+          pattern: |
+            *package*
+
+      - name: Package into a single tarball so we can have individual distributions
+        run: |
+          tar -czvf $GITHUB_WORKSPACE/deliverables.tar.gz -C output .
+        shell: bash
+
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ${{ needs.build-image.outputs.tag }}
+          artifact-name: image-sbom.spdx
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          output-file: output/image-sbom.spdx
+
+      - name: Save image as tarball
+        run: |
+          skopeo copy \
+            --all \
+            --remove-signatures \
+            --src-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "docker://${{ needs.build-image.outputs.tag }}" \
+            "oci-archive:output/fluent-do-agent-container.tar"
+          tar -czvf output/fluent-do-agent-container.tar.gz output/fluent-do-agent-container.tar
+          rm -f output/fluent-do-agent-container.tar
+        shell: bash
+
+      - name: Construct release info
+        # Add target info and OSS version to new JSON file
+        run: |
+          jq '. += { "oss_version": "${{ needs.get-meta.outputs.oss-version }}"}' build-config.json > output/release.json
+        shell: bash
+
+      - name: Debug
+        run: ls -lR
+        shell: bash
+
+      - name: Create release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        # This may fail for workflow_dispatch if the release already exists
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          body: |
+            Fluent Do Agent release for ${{ github.ref_name }} version
+
+            Version: ${{ needs.get-meta.outputs.version }}
+            OSS Version: ${{ needs.get-meta.outputs.oss-version }}
+
+            Targets: ${{ needs.get-meta.outputs.linux-targets }}
+            Images:
+              - ${{ needs.build-image.outputs.tag }}
+          files: |
+            output/*.spdx
+            output/*.json
+            deliverables.tar.gz
+            output/fluent-do-agent-container.tar.gz
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: "projects/841522437311/locations/global/workloadIdentityPools/github-actions/providers/github-actions"
+          service_account: "terraform-infra@infrastructure-464010.iam.gserviceaccount.com"
+
+      - name: Upload packages to Google Cloud Storage if not a PR
+        # Only if not a pull request
+        if: ${{ github.event_name != 'pull_request' }}
+        id: upload-packages
+        uses: google-github-actions/upload-cloud-storage@v3
+        with:
+          path: output/
+          destination: lts_deliverables/${{ needs.get-meta.outputs.build-type }}/${{ needs.get-meta.outputs.version }}/
+
+  update-docs:
+    needs:
+      - get-meta
+      - release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    name: Update documentation on release
+    uses: fluentdo/documentation/.github/workflows/call-add-mapping-version.yaml@main
+    with:
+      agent-version: ${{ needs.get-meta.outputs.version }}
+      oss-version: ${{ needs.get-meta.outputs.oss-version }}
+
+  update-version:
+    name: Update version
+    needs:
+      - get-meta
+      - release
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version info
+        id: get-version
+        run: |
+          # Create a tag name based on the current date
+          # Format: vYY.M.W
+          YEAR=$(date +%y)
+          MONTH=$(date +%-m)
+          WEEK=$((($(date +%-d)-1)/7+1))
+
+          NEXT_WEEK=$((WEEK + 1))
+          # Ignore 5 week months
+          if [ $NEXT_WEEK -gt 4 ]; then
+            NEXT_WEEK=1
+            MONTH=$((MONTH + 1))
+            if [ $MONTH -gt 12 ]; then
+            MONTH=1
+            YEAR=$((YEAR + 1))
+            fi
+          fi
+          echo "next_tag=v${YEAR}.${MONTH}.${NEXT_WEEK}"
+          echo "next_tag=v${YEAR}.${MONTH}.${NEXT_WEEK}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Update version to next week
+        run: ./scripts/update-version.sh
+        shell: bash
+        env:
+          NEW_FLUENTDO_AGENT_VERSION: ${{ steps.get-version.outputs.next_tag }}
+
+      - name: Debug
+        run: |
+          echo "Next tag: ${{ steps.get-version.outputs.next_tag }}"
+          git status
+          git log -n 1
+          git diff
+        shell: bash
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: "projects/841522437311/locations/global/workloadIdentityPools/github-actions/providers/github-actions"
+          service_account: "terraform-infra@infrastructure-464010.iam.gserviceaccount.com"
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - id: get-secrets
+        name: Get secrets from GCP Secret Manager
+        # This step retrieves secrets from GCP Secret Manager and sets them as outputs
+        # The secrets can then be accessed in subsequent steps using ${{ steps.get-secrets.outputs.<secret_name> }}
+        uses: "google-github-actions/get-secretmanager-secrets@v3"
+        with:
+          secrets: |-
+            github-pat:projects/626836145334/secrets/GITHUB_CI_PAT
+
+      - name: Create a PR with the update
+        if: ${{ github.event_name != 'pull_request' }}
+        id: cpr
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "ci: update to new version ${{ steps.get-version.outputs.next_tag }}"
+          signoff: true
+          base: main
+          branch: ci_update-version-${{ steps.get-version.outputs.next_tag }}
+          delete-branch: true
+          title: "ci: update version"
+          token: ${{ steps.get-secrets.outputs.github-pat }}
+          labels: ci,automerge
+          body: |
+            Update version
+            - Created by ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Auto-generated by create-pull-request: https://github.com/peter-evans/create-pull-request
+          draft: false
+
+      - name: Check outputs
+        if: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          echo "Pull Request Number - ${{ steps.cpr.outputs.pull-request-number }}"
+          echo "Pull Request URL - ${{ steps.cpr.outputs.pull-request-url }}"
+        shell: bash
+
+      - name: Enable Pull Request Automerge
+        if: ${{ steps.cpr.outputs.pull-request-number }}
+        run: gh pr merge --squash --auto "${{ steps.cpr.outputs.pull-request-number }}"
+        env:
+          GH_TOKEN: ${{ steps.get-secrets.outputs.github-pat }}

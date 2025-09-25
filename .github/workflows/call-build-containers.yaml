@@ -1,0 +1,232 @@
+---
+name: Build containers
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version we are building for (as a numeric value 1.2.3).
+        required: true
+        type: string
+      ref:
+        description: The commit, SHA or branch to use in this repository.
+        required: false
+        type: string
+        default: main
+      image-base:
+        description: The base name to use for images.
+        required: false
+        type: string
+        default: "ghcr.io/fluentdo/agent"
+      definition:
+        description: The Dockerfile definition to use.
+        required: false
+        type: string
+        default: "Dockerfile.ubi"
+    secrets:
+      cosign_private_key:
+        description: The optional Cosign key to use for signing the images.
+        required: false
+      cosign_private_key_password:
+        description: If the Cosign key requires a password then specify here, otherwise not required.
+        required: false
+    outputs:
+      tag:
+        description: The full image name and tag.
+        value: ${{ jobs.build-container-image-manifest.outputs.tag }}
+      version:
+        description: Just the container version (tag)
+        value: ${{ jobs.build-container-image-manifest.outputs.version }}
+
+jobs:
+  # Taken from https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
+  # We split this out to make it easier to restart just one of them if it fails and do all in parallel
+  build-single-arch-container-images:
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - amd64
+          - arm64
+        target:
+          - production
+    name: ${{ matrix.platform }}/${{ matrix.target }} container image build
+    runs-on: ${{ (contains(matrix.platform, 'arm') && 'self-ubuntu-latest-arm') || 'self-ubuntu-latest' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          repository: FluentDo/agent
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest the standard ${{ matrix.target }} image
+        id: production
+        uses: docker/build-push-action@v6
+        with:
+          # Use path context rather than Git context as we want local files
+          context: .
+          file: ${{ inputs.definition }}
+          outputs: type=image,name=${{ inputs.image-base }},push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/${{ matrix.platform }}
+          target: ${{ matrix.target }}
+          build-args: |
+            FLUENTDO_AGENT_VERSION=${{ inputs.version }}
+          provenance: false
+
+      - name: Export ${{ matrix.target }} digest
+        run: |
+          mkdir -p digests
+          digest="${{ steps.production.outputs.digest }}"
+          touch "digests/${digest#sha256:}"
+        shell: bash
+
+      - name: Create sanitised name for artefact
+        run: |
+          sanitised_image_base=$(echo "${{ inputs.image-base }}" | tr '/:' '__')
+          echo "sanitised_image_base=${sanitised_image_base}"
+          echo "sanitised_image_base=${sanitised_image_base}" >> $GITHUB_OUTPUT
+        id: output-name
+        shell: bash
+
+      - name: Upload ${{ matrix.target }} digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-digests-${{ steps.output-name.outputs.sanitised_image_base }}-${{ matrix.platform }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Take the digests and produce a multi-arch manifest from them.
+  build-container-image-manifest:
+    permissions:
+      contents: read
+      packages: write
+    name: Upload multi-arch container image manifests
+    runs-on: ubuntu-latest
+    needs:
+      - build-single-arch-container-images
+    outputs:
+      tag: ${{ inputs.image-base }}:${{ steps.meta.outputs.version }}
+      image: ${{ inputs.image-base }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Extract metadata from Github
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image-base }}
+          flavor: |
+            latest=false
+          tags: |
+            # Ensure we strip the 'v' prefix
+            type=semver,pattern={{version}},event=tag
+            Add the input version as well for releases
+            type=raw,value=${{ inputs.version }},event=tag
+            # defaults for others
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+
+      - name: Create sanitised name for artefact
+        run: |
+          sanitised_image_base=$(echo "${{ inputs.image-base }}" | tr '/:' '__')
+          echo "sanitised_image_base=${sanitised_image_base}"
+          echo "sanitised_image_base=${sanitised_image_base}" >> $GITHUB_OUTPUT
+        id: output-name
+        shell: bash
+
+      - name: Download digests for all architectures of ${{ steps.output-name.outputs.sanitised_image_base }}
+        uses: actions/download-artifact@v5
+        with:
+          pattern: production-digests-${{ steps.output-name.outputs.sanitised_image_base }}-*
+          path: digests/
+          merge-multiple: true
+
+      - name: Debug
+        run: ls -lR
+        shell: bash
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create production manifest
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ inputs.image-base }}@sha256:%s ' *)
+        shell: bash
+        working-directory: digests/
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ inputs.image-base }}:${{ steps.meta.outputs.version }}
+        shell: bash
+
+  build-container-images-sign:
+    name: Deploy and sign multi-arch container image manifests
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+    runs-on: ubuntu-latest
+    needs:
+      - build-container-image-manifest
+    env:
+      IMAGE: ${{ needs.build-container-image-manifest.outputs.tag }}
+    steps:
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.10.0
+
+      - name: Sign image with a key if defined
+        if: ${{ env.COSIGN_PRIVATE_KEY }}
+        # Ensure we move on to OIDC signing as well
+        continue-on-error: true
+        run: |
+          cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$IMAGE"
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.cosign_private_key }}
+          COSIGN_PASSWORD: ${{ secrets.cosign_private_key_password }} # optional
+        shell: bash
+
+      - name: Sign the images with GitHub OIDC Token
+        # This step uses the identity token to provision an ephemeral certificate
+        # against the sigstore community Fulcio instance, and records it to the
+        # sigstore community Rekor transparency log.
+        #
+        # We use recursive signing on the manifest to cover all the images.
+        continue-on-error: true
+        run: |
+          cosign sign --yes --recursive "$IMAGE"
+        shell: bash

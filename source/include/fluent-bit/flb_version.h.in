@@ -1,0 +1,67 @@
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+
+/*  FluentDo Agent
+ *  ==============
+ *  Copyright (C) 2015-2025 The Fluent Bit Authors
+ *  Copyright (C) 2025 FluentDo
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+#ifndef FLB_VERSION_H
+#define FLB_VERSION_H
+
+#include <fluent-bit/flb_info.h>
+#include <fluent-bit/flb_motd.h>
+#include <monkey/mk_core.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+
+/* Helpers to convert/format version string */
+#define STR_HELPER(s)      #s
+#define STR(s)             STR_HELPER(s)
+
+/* FluentDo Agent Version */
+#define FLB_VERSION_MAJOR   @FLB_VERSION_MAJOR@
+#define FLB_VERSION_MINOR   @FLB_VERSION_MINOR@
+#define FLB_VERSION_PATCH   @FLB_VERSION_PATCH@
+#define FLB_VERSION         (FLB_VERSION_MAJOR * 10000 \
+                             FLB_VERSION_MINOR * 100   \
+                             FLB_VERSION_PATCH)
+#define FLB_VERSION_STR     "@FLB_VERSION_STR@"
+#define FLB_GIT_HASH        "@FLB_GIT_HASH@"
+
+static inline void flb_version()
+{
+#ifdef FLB_NIGHTLY_BUILD
+    printf("FluentDo Agent v%s | NIGHTLY_BUILD=%s - DO NOT USE IN PRODUCTION!\n",
+           FLB_VERSION_STR, STR(FLB_NIGHTLY_BUILD));
+#else
+    printf("FluentDo Agent v%s\n", FLB_VERSION_STR);
+#endif
+    printf("Git commit: %s\n", FLB_GIT_HASH);
+
+    exit(EXIT_SUCCESS);
+}
+
+static inline void flb_version_banner()
+{
+    /* FluentDo Agent - Enterprise-ready downstream distribution */
+    fprintf(stderr, "FluentDo Agent v%s\n", FLB_VERSION_STR);
+    fprintf(stderr, "* A stable, secure by default and enterprise ready\n");
+    fprintf(stderr, "* downstream distribution of Fluent Bit\n");
+    fprintf(stderr, "* https://docs.fluent.do\n\n");
+}
+
+#endif

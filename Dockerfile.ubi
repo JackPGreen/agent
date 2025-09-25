@@ -1,0 +1,131 @@
+FROM registry.access.redhat.com/ubi9:9.5 AS base-builder
+# hadolint ignore=DL3041
+RUN dnf update -y && dnf install -y cmake3 diffutils gcc gcc-c++ git m4 make openssl-devel patch systemd-devel tar unzip libyaml-devel cyrus-sasl-devel && dnf clean all
+
+# Provide the dependencies for record accessor built from source
+ARG BISON_VER=3.8.2
+ARG BISON_URL=https://www.mirrorservice.org/sites/ftp.gnu.org/gnu/bison/
+ARG FLEX_VER=2.6.4
+ARG FLEX_URL=https://github.com/westes/flex/releases/download/v${FLEX_VER}
+ADD ${BISON_URL}/bison-${BISON_VER}.tar.gz /bison/
+ADD ${FLEX_URL}/flex-${FLEX_VER}.tar.gz /flex/
+RUN tar -xzvf /bison/bison-${BISON_VER}.tar.gz -C /bison/ && tar -xzvf /flex/flex-${FLEX_VER}.tar.gz -C /flex/
+
+# Flex needs Bison so do first
+WORKDIR /bison/bison-${BISON_VER}/
+RUN ./configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
+WORKDIR /flex/flex-${FLEX_VER}/
+RUN ./configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
+
+FROM base-builder AS source-builder
+
+# Fluent Bit version
+ARG FLUENT_BIT_VERSION
+ENV FLUENTBIT_VERSION=$FLUENT_BIT_VERSION
+ARG FLB_NIGHTLY_BUILD
+ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
+
+ARG FLUENTDO_AGENT_VERSION=25.10.1
+ENV FLUENTDO_AGENT_VERSION=${FLUENTDO_AGENT_VERSION}
+
+# Copy any local source files as needed
+WORKDIR /source/
+COPY source/ /source/
+
+# Some components assume a git repository is present, so we create one otherwise it fails
+RUN git init -q /source/ && \
+    git config user.name "Fluent Do Agent Builder" && \
+    git config user.email "info@fluent.do" && \
+    git add -A && \
+    git commit -q -a -m "Initial commit for Fluent Do Agent"
+
+# Install and create all necessary directories
+RUN mkdir -p /fluent-bit/bin /fluent-bit/etc /fluent-bit/log
+COPY source/conf/ /fluent-bit/etc/
+
+ARG CMAKE_EXTRA_ARGS
+ENV CMAKE_EXTRA_ARGS=${CMAKE_EXTRA_ARGS}
+
+FROM source-builder AS builder
+
+WORKDIR /source/build/
+
+# Separate layers now for configure and build to allow local caching
+#hadolint ignore=SC2086
+RUN cmake -DCMAKE_BUILD_TYPE=Release \
+    -DFLB_RELEASE=On \
+    -DFLB_TRACE=Off \
+    -DFLB_JEMALLOC=On \
+    -DFLB_TLS=On \
+    -DFLB_SHARED_LIB=Off \
+    -DFLB_EXAMPLES=Off \
+    -DFLB_HTTP_SERVER=On \
+    -DFLB_IN_SYSTEMD=On \
+    -DFLB_IN_KAFKA=On \
+    -DFLB_OUT_KAFKA=On \
+    -DFLB_OUT_PGSQL=Off \
+    -DFLB_TESTS_INTERNAL=Off \
+    -DFLB_TESTS_RUNTIME=Off \
+    -DFLB_NIGHTLY_BUILD="$FLB_NIGHTLY_BUILD" \
+    -DFLUENTDO_AGENT_VERSION="$FLUENTDO_AGENT_VERSION" \
+    -DFLB_LOG_NO_CONTROL_CHARS=On \
+    -DFLB_CHUNK_TRACE=On \
+    -DFLB_ARROW=On \
+    -DFLB_AVRO_ENCODER=On \
+    -DFLB_CORO_STACK_SIZE=131072 \
+    ${CMAKE_EXTRA_ARGS} \
+    ..
+
+# Build and install, also copy to OSS default to make migration simple
+ARG MAKE_EXTRA_ARGS
+ENV MAKE_EXTRA_ARGS=${MAKE_EXTRA_ARGS}
+
+RUN [ -n "$MAKE_EXTRA_ARGS" ] && make ${MAKE_EXTRA_ARGS} || make -j "$(getconf _NPROCESSORS_ONLN)" && \
+    strip bin/fluent-bit && \
+    install bin/fluent-bit /fluent-bit/bin/ && \
+    install bin/fluent-bit /fluent-bit/bin/fluent-bit
+
+# The release image now
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS production
+# hadolint ignore=DL3041
+RUN microdnf update -y && microdnf install -y openssl libyaml && microdnf clean all
+
+EXPOSE 2020
+
+ENTRYPOINT [ "/fluent-bit/bin/fluent-bit" ]
+CMD [ "/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf" ]
+
+# Ensure we add licensing and help information for certification requirements
+COPY licenses/* /licenses/
+COPY README.md /help.1
+
+COPY --from=builder /fluent-bit /fluent-bit
+
+RUN mkdir -p /opt/fluent-do-agent/etc
+COPY config/ /opt/fluent-do-agent/etc/
+COPY config/ /fluent-bit/etc/
+
+# Generate schema and include as part of the container image
+RUN /fluent-bit/bin/fluent-bit -J > /fluent-bit/etc/schema.json && \
+    /fluent-bit/bin/fluent-bit -J > /opt/fluent-do-agent/etc/schema.json
+
+# Run as non-root user - pick a random one
+RUN useradd -u 9876 -m -s /bin/false fluent-do-agent
+
+ARG FLUENT_BIT_VERSION
+ARG FLUENTDO_AGENT_VERSION
+
+ENV FLUENTBIT_VERSION=$FLUENT_BIT_VERSION
+ENV FLUENTDO_AGENT_VERSION=$FLUENTDO_AGENT_VERSION
+
+USER 9876
+
+# Debug image for development
+FROM builder AS debug
+# hadolint ignore=DL3041
+RUN dnf install -y gdb go-toolset procps && dnf clean all
+
+COPY --from=production /opt/fluent-do-agent /opt/fluent-do-agent
+COPY --from=production /fluent-bit /fluent-bit
+
+ENTRYPOINT [ "bash" ]
