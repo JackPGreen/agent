@@ -149,6 +149,9 @@ get_current_branch() {
 collect_commits() {
     log_step "Collecting Commit Information"
 
+    # Ensure we have latest origin/main
+    git fetch origin main 2>/dev/null
+
     local current_branch=$(get_current_branch)
     local base_branch="origin/main"
 
@@ -297,7 +300,17 @@ create_pr() {
 
     # Create PR
     log_info "Creating PR..."
-    local pr_url=$(eval "$gh_cmd")
+    log_info "Command: $gh_cmd"  # Debug: show the command
+
+    # Run command and capture output
+    if eval "$gh_cmd" > /tmp/pr_output.txt 2>&1; then
+        local pr_url=$(cat /tmp/pr_output.txt)
+    else
+        log_error "Failed to create PR:"
+        cat /tmp/pr_output.txt
+        rm -f /tmp/pr_output.txt
+        exit 1
+    fi
 
     if [[ -n "$pr_url" ]]; then
         log_success "PR created successfully!"
