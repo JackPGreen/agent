@@ -25,6 +25,7 @@
 #include <fluent-bit/flb_bucket_queue.h>
 #include <fluent-bit/flb_event_loop.h>
 #include <fluent-bit/flb_time.h>
+#include <fluent-bit/flb_lib.h>
 #include <fluent-bit/flb_info.h>
 #include <fluent-bit/flb_bits.h>
 
@@ -241,6 +242,7 @@ static inline int handle_output_event(uint64_t ts,
     int retry_seconds;
     uint32_t type;
     uint32_t key;
+    double latency_seconds;
     char *name;
     struct flb_task *task;
     struct flb_task_retry *retry;
@@ -304,6 +306,13 @@ static inline int handle_output_event(uint64_t ts,
 
         cmt_counter_add(ins->cmt_proc_bytes, ts, task->event_chunk->size,
                         1, (char *[]) {name});
+
+        /* latency histogram */
+        if (ins->cmt_latency) {
+            latency_seconds = flb_time_now() - ((struct flb_input_chunk *) task->ic)->create_time;
+            cmt_histogram_observe(ins->cmt_latency, ts, latency_seconds, 2,
+                                  (char *[]) {(char *) flb_input_name(task->i_ins), name});
+        }
 
         /* [OLD API] Update metrics */
 #ifdef FLB_HAVE_METRICS
