@@ -150,7 +150,7 @@ collect_commits() {
     log_step "Collecting Commit Information"
 
     local current_branch=$(get_current_branch)
-    local base_branch="main"
+    local base_branch="origin/main"
 
     # Get list of commits that will be in PR
     local commit_count=$(git rev-list --count ${base_branch}..HEAD)
