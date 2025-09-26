@@ -152,11 +152,13 @@ collect_commits() {
     # Ensure we have latest origin/main
     git fetch origin main 2>/dev/null
 
-    local current_branch=$(get_current_branch)
+    local current_branch
+    current_branch=$(get_current_branch)
     local base_branch="origin/main"
 
     # Get list of commits that will be in PR
-    local commit_count=$(git rev-list --count ${base_branch}..HEAD)
+    local commit_count
+    commit_count=$(git rev-list --count "${base_branch}"..HEAD)
     log_info "Found $commit_count commits to include in PR"
 
     # Collect upstream patches
@@ -166,17 +168,20 @@ collect_commits() {
     local other_patches=""
 
     while IFS= read -r line; do
-        local hash=$(echo "$line" | cut -d' ' -f1)
-        local msg=$(echo "$line" | cut -d' ' -f2-)
+        local hash msg
+        hash=$(echo "$line" | cut -d' ' -f1)
+        msg=$(echo "$line" | cut -d' ' -f2-)
 
         # Categorize patches
         if [[ "$msg" =~ \[upstream\] ]]; then
             # Extract the clean message
-            local clean_msg=$(echo "$msg" | sed 's/\[upstream\] //')
+            local clean_msg
+            clean_msg=${msg//\[upstream\] /}
 
             # Extract upstream commit hash from commit message body if present
             local upstream_hash=""
-            local commit_body=$(git log -1 --format=%B "$hash")
+            local commit_body
+            commit_body=$(git log -1 --format=%B "$hash")
             if echo "$commit_body" | grep -q "Upstream-Ref:"; then
                 upstream_hash=$(echo "$commit_body" | grep "Upstream-Ref:" | sed 's/.*commit\///' | head -1)
             fi
@@ -205,10 +210,9 @@ collect_commits() {
                 fi
             fi
         fi
-    done < <(git log --oneline ${base_branch}..HEAD)
+    done < <(git log --oneline "${base_branch}"..HEAD)
 
     # Store for PR body
-    COMMIT_LIST="$patches"
     TECHNICAL_LIST="$technical_patches"
     TEST_LIST="$test_patches"
     OTHER_LIST="$other_patches"
@@ -270,7 +274,8 @@ EOF
 prepare_branch() {
     log_step "Preparing Branch"
 
-    local current_branch=$(get_current_branch)
+    local current_branch
+    current_branch=$(get_current_branch)
 
     if [[ "$current_branch" == "main" || "$current_branch" == "master" ]]; then
         # Create new branch
@@ -306,7 +311,8 @@ prepare_branch() {
 create_pr() {
     log_step "Creating Pull Request"
 
-    local pr_body_file=$(generate_pr_body)
+    local pr_body_file
+    pr_body_file=$(generate_pr_body)
     local pr_title="feat: sync upstream Fluent Bit from ${FROM_VERSION} to ${TO_VERSION}"
 
     # Build gh pr create command
@@ -326,7 +332,8 @@ create_pr() {
 
     # Run command and capture output
     if eval "$gh_cmd" > /tmp/pr_output.txt 2>&1; then
-        local pr_url=$(cat /tmp/pr_output.txt)
+        local pr_url
+        pr_url=$(cat /tmp/pr_output.txt)
     else
         log_error "Failed to create PR:"
         cat /tmp/pr_output.txt

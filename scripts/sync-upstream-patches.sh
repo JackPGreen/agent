@@ -142,7 +142,8 @@ log_step() { echo; log "${CYAN}═══ $1 ═══${NC}"; }
 # Categorize patch by analyzing its filename and content
 categorize_patch() {
     local patch_file="$1"
-    local patch_name=$(basename "$patch_file")
+    local patch_name
+    patch_name=$(basename "$patch_file")
 
     # Check filename patterns
     if [[ "$patch_name" =~ build.*bump|bump.*version|dockerfile.*bump|snap.*bump|bitbake.*bump ]]; then
@@ -189,10 +190,11 @@ generate_patches() {
     mkdir -p "$PATCH_DIR"
 
     # Generate patches
-    local patch_count=$(git rev-list --count ${FROM_VERSION}..${TO_VERSION})
+    local patch_count
+    patch_count=$(git rev-list --count "${FROM_VERSION}".."${TO_VERSION}")
     log_info "Found $patch_count commits between versions"
 
-    git format-patch ${FROM_VERSION}..${TO_VERSION} -o "$PATCH_DIR" --no-stat
+    git format-patch "${FROM_VERSION}".."${TO_VERSION}" -o "$PATCH_DIR" --no-stat
     log_success "Generated $patch_count patch files in $PATCH_DIR"
 }
 
@@ -211,10 +213,11 @@ analyze_patches() {
     echo "───────────────"
 
     for patch_file in "$PATCH_DIR"/*.patch; do
-        local patch_name=$(basename "$patch_file")
-        local category=$(categorize_patch "$patch_file")
-        local description=$(get_patch_description "$patch_file")
-        local commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 7)}')
+        local patch_name category description commit_hash
+        patch_name=$(basename "$patch_file")
+        category=$(categorize_patch "$patch_file")
+        description=$(get_patch_description "$patch_file")
+        commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 7)}')
 
         case "$category" in
             TECHNICAL)
@@ -254,13 +257,14 @@ analyze_patches() {
 # Apply a single patch
 apply_patch() {
     local patch_file="$1"
-    local patch_name=$(basename "$patch_file")
-    local description=$(get_patch_description "$patch_file")
-    local commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 12)}')
-    local full_hash=$(grep "^From " "$patch_file" | awk '{print $2}')
+    local patch_name description commit_hash full_hash original_dir
+    patch_name=$(basename "$patch_file")
+    description=$(get_patch_description "$patch_file")
+    commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 12)}')
+    full_hash=$(grep "^From " "$patch_file" | awk '{print $2}')
 
     # Save current directory
-    local original_dir=$(pwd)
+    original_dir=$(pwd)
 
     # Try different patch methods from within SOURCE_DIR
     cd "$SOURCE_DIR"
@@ -292,9 +296,10 @@ apply_patch() {
     if [[ "$applied" == false ]]; then
         # Try with git apply but verify it actually changes files
         if [[ "$DRY_RUN" == false ]]; then
-            local files_before=$(find . -type f -name "*.c" -o -name "*.h" | xargs ls -l | md5sum)
+            local files_before files_after
+            files_before=$(find . -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 ls -l | md5sum)
             git apply "$patch_file" 2>/dev/null
-            local files_after=$(find . -type f -name "*.c" -o -name "*.h" | xargs ls -l | md5sum)
+            files_after=$(find . -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 ls -l | md5sum)
             if [[ "$files_before" != "$files_after" ]]; then
                 applied=true && method="git apply"
             fi
@@ -350,10 +355,11 @@ apply_patches() {
     touch "$PATCH_DIR/applied.log" "$PATCH_DIR/failed.log" "$PATCH_DIR/skipped.log"
 
     for patch_file in "$PATCH_DIR"/*.patch; do
-        local patch_name=$(basename "$patch_file")
-        local category=$(categorize_patch "$patch_file")
-        local description=$(get_patch_description "$patch_file")
-        local commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 12)}')
+        local patch_name category description commit_hash
+        patch_name=$(basename "$patch_file")
+        category=$(categorize_patch "$patch_file")
+        description=$(get_patch_description "$patch_file")
+        commit_hash=$(grep "^From " "$patch_file" | awk '{print substr($2, 1, 12)}')
 
         echo
         case "$category" in
@@ -434,9 +440,10 @@ EOF
 show_summary() {
     log_step "Summary"
 
-    local applied_count=$(wc -l < "$PATCH_DIR/applied.log" 2>/dev/null || echo 0)
-    local failed_count=$(wc -l < "$PATCH_DIR/failed.log" 2>/dev/null || echo 0)
-    local skipped_count=$(wc -l < "$PATCH_DIR/skipped.log" 2>/dev/null || echo 0)
+    local applied_count failed_count skipped_count
+    applied_count=$(wc -l < "$PATCH_DIR/applied.log" 2>/dev/null || echo 0)
+    failed_count=$(wc -l < "$PATCH_DIR/failed.log" 2>/dev/null || echo 0)
+    skipped_count=$(wc -l < "$PATCH_DIR/skipped.log" 2>/dev/null || echo 0)
 
     log_info "Applied: $applied_count patches"
     log_info "Failed: $failed_count patches"
@@ -466,7 +473,8 @@ main() {
 
     # Get current version
     if [[ -f "$CURRENT_VERSION_FILE" ]]; then
-        local current_version=$(cat "$CURRENT_VERSION_FILE")
+        local current_version
+        current_version=$(cat "$CURRENT_VERSION_FILE")
         log_info "Current upstream version: $current_version"
     fi
 
@@ -502,7 +510,8 @@ main() {
 
 Synced patches from Fluent Bit $FROM_VERSION to $TO_VERSION"
 
-            local commit_count=$(cat "$PATCH_DIR/applied.log" | wc -l)
+            local commit_count
+            commit_count=$(wc -l < "$PATCH_DIR/applied.log")
             log_success "Created $((commit_count + 1)) commits (including version update)"
 
             echo
