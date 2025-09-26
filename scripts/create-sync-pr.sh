@@ -173,14 +173,36 @@ collect_commits() {
         if [[ "$msg" =~ \[upstream\] ]]; then
             # Extract the clean message
             local clean_msg=$(echo "$msg" | sed 's/\[upstream\] //')
-            patches="${patches}- ${hash}: ${clean_msg}\n"
 
-            if [[ "$msg" =~ test|tests ]]; then
-                test_patches="${test_patches}- ${hash}: ${clean_msg}\n"
-            elif [[ "$msg" =~ chore:|build:|docs: ]]; then
-                other_patches="${other_patches}- ${hash}: ${clean_msg}\n"
+            # Extract upstream commit hash from commit message body if present
+            local upstream_hash=""
+            local commit_body=$(git log -1 --format=%B "$hash")
+            if echo "$commit_body" | grep -q "Upstream-Ref:"; then
+                upstream_hash=$(echo "$commit_body" | grep "Upstream-Ref:" | sed 's/.*commit\///' | head -1)
+            fi
+
+            # Format with link to upstream commit if we have it
+            if [[ -n "$upstream_hash" ]]; then
+                patches="${patches}- [\`${hash:0:7}\`](https://github.com/fluent/fluent-bit/commit/${upstream_hash}): ${clean_msg}\n"
+
+                if [[ "$msg" =~ test|tests ]]; then
+                    test_patches="${test_patches}- [\`${hash:0:7}\`](https://github.com/fluent/fluent-bit/commit/${upstream_hash}): ${clean_msg}\n"
+                elif [[ "$msg" =~ chore:|build:|docs: ]]; then
+                    other_patches="${other_patches}- [\`${hash:0:7}\`](https://github.com/fluent/fluent-bit/commit/${upstream_hash}): ${clean_msg}\n"
+                else
+                    technical_patches="${technical_patches}- [\`${hash:0:7}\`](https://github.com/fluent/fluent-bit/commit/${upstream_hash}): ${clean_msg}\n"
+                fi
             else
-                technical_patches="${technical_patches}- ${hash}: ${clean_msg}\n"
+                # No upstream ref, just use the hash without link
+                patches="${patches}- ${hash}: ${clean_msg}\n"
+
+                if [[ "$msg" =~ test|tests ]]; then
+                    test_patches="${test_patches}- ${hash}: ${clean_msg}\n"
+                elif [[ "$msg" =~ chore:|build:|docs: ]]; then
+                    other_patches="${other_patches}- ${hash}: ${clean_msg}\n"
+                else
+                    technical_patches="${technical_patches}- ${hash}: ${clean_msg}\n"
+                fi
             fi
         fi
     done < <(git log --oneline ${base_branch}..HEAD)
