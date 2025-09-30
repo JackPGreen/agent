@@ -19,7 +19,13 @@ function check_help_output() {
 	for disabledFeature in \
 		'FLB_HAVE_STREAM_PROCESSOR' \
 		'FLB_HAVE_CHUNK_TRACE' \
-		'FLB_HAVE_WASM'
+		'FLB_HAVE_WASM' \
+		'FLB_HAVE_PROXY_GO' \
+		'alter_size' \
+		'checklist' \
+		'geoip2' \
+		'nightfall' \
+		'wasm'
 	do
 		if echo "$output" | grep -q "$disabledFeature"; then
 			echo "ERROR: $disabledFeature support is enabled but should be disabled"
@@ -31,7 +37,8 @@ function check_help_output() {
 	for requiredFeature in \
 		'FLB_HAVE_KAFKA_SASL' \
 		'FLB_HAVE_KAFKA_OAUTHBEARER' \
-		'FLB_HAVE_AWS_MSK_IAM'
+		'FLB_HAVE_AWS_MSK_IAM' \
+		'FLB_HAVE_LIBYAML'
 	do
 		if echo "$output" | grep -qv "$requiredFeature"; then
 			echo "ERROR: $requiredFeature support is missing but should be enabled"
