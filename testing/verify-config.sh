@@ -40,7 +40,7 @@ function check_help_output() {
 		'FLB_HAVE_AWS_MSK_IAM' \
 		'FLB_HAVE_LIBYAML'
 	do
-		if echo "$output" | grep -qv "$requiredFeature"; then
+		if ! echo "$output" | grep -q "$requiredFeature"; then
 			echo "ERROR: $requiredFeature support is missing but should be enabled"
 			echo "Output was: $output"
 			exit 1
