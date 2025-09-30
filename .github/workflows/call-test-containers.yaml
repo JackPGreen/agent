@@ -50,7 +50,7 @@ jobs:
           password: ${{ secrets.github-token }}
 
       - name: Run config tests
-        run: ./testing/run-config-tests.sh
+        run: ./testing/verify-config.sh
         shell: bash
 
       - name: Set up Helm
