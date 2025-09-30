@@ -6,7 +6,6 @@
   <a href="https://docs.fluent.do"><img src="https://img.shields.io/badge/docs-docs.fluent.do-blue" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://github.com/FluentDo/agent/releases"><img src="https://img.shields.io/github/v/release/FluentDo/agent?sort=semver" alt="Release"></a>
-  <a href="https://codecov.io/gh/FluentDo/agent"><img src="https://codecov.io/gh/FluentDo/agent/branch/main/graph/badge.svg" alt="codecov"></a>
   <a href="https://fluent.do/support"><img src="https://img.shields.io/badge/LTS-24%20months-green" alt="LTS"></a>
   <a href="https://join.slack.com/share/enQtOTU4MDk0MTQ0OTYzNi03MTY5MTc2Y2I0Y2JhY2QxNzc5MDNkNDdhNTRhNTgzNjkwMDc4Mzk1YTRhZWUzNTE4ZjM3OTljOTA4MzAxYjBl"><img src="https://img.shields.io/badge/slack-join-brightgreen" alt="Slack"></a>
 </p>
