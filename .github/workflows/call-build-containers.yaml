@@ -53,7 +53,7 @@ jobs:
         target:
           - production
     name: ${{ matrix.platform }}/${{ matrix.target }} container image build
-    runs-on: ${{ (contains(matrix.platform, 'arm') && 'self-ubuntu-latest-arm') || 'self-ubuntu-latest' }}
+    runs-on: ${{ (contains(matrix.platform, 'arm') && 'namespace-profile-ubuntu-latest-arm') || 'namespace-profile-ubuntu-latest' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -62,11 +62,12 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      # Not required on Namespace and can break builds
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # - name: Set up Docker Buildx
+      #   uses: docker/setup-buildx-action@v3
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -136,7 +137,7 @@ jobs:
           tags: |
             # Ensure we strip the 'v' prefix
             type=semver,pattern={{version}},event=tag
-            Add the input version as well for releases
+            # Add the input version as well for releases
             type=raw,value=${{ inputs.version }},event=tag
             # defaults for others
             type=schedule

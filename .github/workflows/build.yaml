@@ -73,8 +73,6 @@ jobs:
           echo "Using version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         shell: bash
-        env:
-          INPUT_VERSION: ${{ (github.event_name == 'push' && startsWith(github.event.ref, 'refs/tags/') && github.ref_name) || '' }}
 
       - name: Extract the configuration from the JSON file
         # Read from the file and remove newline characters: https://stackoverflow.com/a/64627966
@@ -108,7 +106,6 @@ jobs:
       fail-fast: false
       matrix:
         image-base:
-          - "ghcr.io/fluentdo/agent"
           - "ghcr.io/fluentdo/agent/ubi"
           - "ghcr.io/fluentdo/agent/debian"
     permissions:
@@ -124,6 +121,67 @@ jobs:
 
       # Pick the Dockerfile to use for each image
       definition: ${{ (contains(matrix.image-base, 'debian') && 'Dockerfile.debian') || 'Dockerfile.ubi' }}
+
+  # We want to copy the UBI image to ghcr.io/fluentdo/agent:version and
+  # the distroless image to ghcr.io/fluentdo/agent:version-slim
+  copy-common-images:
+    # Only run for releases to reduce unnecessary load on the registry
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    name: Copy common container images to main image names
+    needs:
+      - get-meta
+      - build-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+    env:
+      UBI_IMAGE_NAME: ghcr.io/fluentdo/agent/ubi
+      DISTROLESS_IMAGE_NAME: ghcr.io/fluentdo/agent/debian
+      OUTPUT_IMAGE_NAME: ghcr.io/fluentdo/agent
+      TAG: ${{ needs.build-image.outputs.version }}
+    steps:
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote UBI images
+        run: |
+          docker pull "$UBI_IMAGE_NAME:$TAG"
+          docker run --rm  \
+            quay.io/skopeo/stable:latest \
+            copy \
+              --all \
+              --retry-times 10 \
+              --src-no-creds \
+              --dest-creds "$DEST_CREDS" \
+              "docker://$UBI_IMAGE_NAME:$TAG" \
+              "docker://$OUTPUT_IMAGE_NAME:$TAG"
+        env:
+          DEST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+
+      - name: Promote distroless images
+        run: |
+          docker pull "$DISTROLESS_IMAGE_NAME:$TAG"
+          docker run --rm  \
+            quay.io/skopeo/stable:latest \
+            copy \
+              --all \
+              --retry-times 10 \
+              --src-no-creds \
+              --dest-creds "$DEST_CREDS" \
+              "docker://$DISTROLESS_IMAGE_NAME:$TAG" \
+              "docker://$OUTPUT_IMAGE_NAME:${TAG:?}-slim"
+        env:
+          DEST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
+        shell: bash
 
   test_kubernetes:
     # Only run Kubernetes tests if we are not a pull request or have a label set
@@ -148,7 +206,8 @@ jobs:
       matrix:
         kind-version: ${{ fromJson(needs.get-meta.outputs.kind-versions) }}
         image-base:
-          - "ghcr.io/fluentdo/agent"
+          - "ghcr.io/fluentdo/agent/ubi"
+          - "ghcr.io/fluentdo/agent/debian"
 
   build-linux:
     # Only build Linux packages if we are not a pull request or have a label set
@@ -175,6 +234,10 @@ jobs:
       actions: read
       contents: write
       id-token: write
+    env:
+      UBI_IMAGE_NAME: ghcr.io/fluentdo/agent/ubi
+      DISTROLESS_IMAGE_NAME: ghcr.io/fluentdo/agent/debian
+      TAG: ${{ needs.build-image.outputs.version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -199,11 +262,19 @@ jobs:
 
       - uses: anchore/sbom-action@v0
         with:
-          image: ${{ needs.build-image.outputs.tag }}
-          artifact-name: image-sbom.spdx
+          image: ${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}
+          artifact-name: image-ubi-sbom.spdx
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
-          output-file: output/image-sbom.spdx
+          output-file: output/image-ubi-sbom.spdx
+
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}
+          artifact-name: image-debian-sbom.spdx
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          output-file: output/image-debian-sbom.spdx
 
       - name: Save image as tarball
         run: |
@@ -211,10 +282,16 @@ jobs:
             --all \
             --remove-signatures \
             --src-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
-            "docker://${{ needs.build-image.outputs.tag }}" \
+            "docker://${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}" \
             "oci-archive:output/fluent-do-agent-container.tar"
-          tar -czvf output/fluent-do-agent-container.tar.gz output/fluent-do-agent-container.tar
-          rm -f output/fluent-do-agent-container.tar
+          skopeo copy \
+            --all \
+            --remove-signatures \
+            --src-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "docker://${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}" \
+            "oci-archive:output/fluent-do-agent-container-slim.tar"
+          tar -czvf output/fluent-do-agent-container.tar.gz output/fluent-do-agent-container.tar output/fluent-do-agent-container-slim.tar
+          rm -f output/fluent-do-agent-container.tar output/fluent-do-agent-container-slim.tar
         shell: bash
 
       - name: Construct release info
@@ -241,7 +318,8 @@ jobs:
 
             Targets: ${{ needs.get-meta.outputs.linux-targets }}
             Images:
-              - ${{ needs.build-image.outputs.tag }}
+              - ${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}
+              - ${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}
           files: |
             output/*.spdx
             output/*.json
@@ -264,7 +342,7 @@ jobs:
         uses: google-github-actions/upload-cloud-storage@v3
         with:
           path: output/
-          destination: lts_deliverables/${{ needs.get-meta.outputs.build-type }}/${{ needs.get-meta.outputs.version }}/
+          destination: fluentdo-agent-${{ needs.get-meta.outputs.build-type }}/${{ needs.get-meta.outputs.version }}/
 
   update-docs:
     needs:
