@@ -9,7 +9,7 @@ ARG BASE_BUILDER
 # We need cmake >3.12 as well for some dependencies.
 # Unfortunately for some targets this is not available as a dependency so we install the binary direct
 # from the cmake download site. This is the version used.
-ARG CMAKE_VERSION=3.23.1
+ARG CMAKE_VERSION=3.31.6
 
 # Multiarch support
 FROM multiarch/qemu-user-static:x86_64-aarch64 as multiarch-aarch64
@@ -24,15 +24,21 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # If this bug happens to trigger in the future, adding a "zypper -n download" of a subset of the packages can avoid the segfault.
 # hadolint ignore=DL3036,DL3037
 RUN set -x; \
-    # The 'OSS Update' repo signature is no longer valid
+    # The repo signatures are no longer valid
+    # TODO: use checksum verification on updates
     zypper --no-gpg-check refresh 'OSS Update' && \
+    zypper --no-gpg-check refresh 'NON OSS Update' && \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
-    gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
+    gcc gcc-c++ glibc-devel zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
     # Remove expired root certificate.
     mv /var/lib/ca-certificates/pem/DST_Root_CA_X3.pem /etc/pki/trust/blacklist/ && \
     update-ca-certificates && \
     # Allow fluent-bit to find systemd
     ln -fs /usr/lib/systemd /lib/systemd
+
+# Unfortunately this currently fails with missing dependencies and the requirement for C++17.
+ARG FLB_PROCESSOR_DEDUP=Off
+ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
 
 # suse/15 base image
 FROM opensuse/leap:15.3 AS suse-15-base
@@ -43,6 +49,9 @@ RUN set -x; \
     gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
     # Allow fluent-bit to find systemd
     ln -fs /usr/lib/systemd /lib/systemd
+
+ARG FLB_PROCESSOR_DEDUP=On
+ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
 
 # suse/15.arm64v8 base image
 # hadolint ignore=DL3029
@@ -55,6 +64,9 @@ RUN set -x; \
     gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
     # Allow fluent-bit to find systemd
     ln -fs /usr/lib/systemd /lib/systemd
+
+ARG FLB_PROCESSOR_DEDUP=On
+ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
 
 # Common build for all distributions now
 # hadolint ignore=DL3006
@@ -83,6 +95,12 @@ RUN ./configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
 WORKDIR /flex/flex-${FLEX_VER}/
 RUN ./configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
 
+# We need a more recent OpenSSL as well so build from source
+ADD https://github.com/openssl/openssl/releases/download/openssl-3.5.2/openssl-3.5.2.tar.gz /openssl/
+RUN tar -xzvf /openssl/openssl-3.5.2.tar.gz -C /openssl
+WORKDIR /openssl/openssl-3.5.2
+RUN ./Configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
+
 ARG FLB_NIGHTLY_BUILD
 ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
 
@@ -110,6 +128,9 @@ RUN cmake -DCMAKE_INSTALL_PREFIX="$CMAKE_INSTALL_PREFIX" \
     -DFLB_NIGHTLY_BUILD="$FLB_NIGHTLY_BUILD" \
     -DFLB_CONFIG_YAML="${FLB_CONFIG_YAML}" \
     -DWITH_CURL="${WITH_CURL}" \
+    -DFLB_PROCESSOR_DEDUP="${FLB_PROCESSOR_DEDUP}" \
+    -DOPENSSL_ROOT_DIR=/openssl/openssl-3.5.2 \
+    -DOPENSSL_USE_STATIC_LIBS=On \
     ../
 
 VOLUME [ "/output" ]
