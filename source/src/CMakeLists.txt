@@ -94,6 +94,14 @@ set(src
   flb_mem.c
   )
 
+# Git support (optional)
+if(LIBGIT2_FOUND)
+  set(src
+    ${src}
+    flb_git.c
+    )
+endif()
+
 # Config format
 set(src
   ${src}
@@ -273,6 +281,10 @@ if(FLB_SYSTEM_WINDOWS)
     "crypt32.lib"
     "Bcrypt.lib"
     "Shlwapi.lib"
+    "winhttp.lib"
+    "rpcrt4.lib"
+    "zlib.lib"
+    "pcre.lib"
     )
 else()
   set(FLB_DEPS
@@ -399,6 +411,7 @@ set(FLB_DEPS
   snappy-c
   lwrb
   ${NGHTTP2_LIBRARIES}
+  ${LIBGIT2_LIBRARIES}
   )
 
 if(OPENSSL_FOUND)

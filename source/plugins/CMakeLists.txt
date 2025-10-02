@@ -243,6 +243,9 @@ endmacro()
 # ======================
 
 # Custom Plugins
+if(LIBGIT2_FOUND)
+  REGISTER_CUSTOM_PLUGIN("custom_git_config")
+endif()
 
 REGISTER_IN_PLUGIN("in_blob")
 
@@ -274,6 +277,9 @@ if(FLB_KAFKA)
 endif()
 
 REGISTER_IN_PLUGIN("in_fluentbit_metrics")
+if(LIBGIT2_FOUND)
+  REGISTER_IN_PLUGIN("in_git_config")
+endif()
 REGISTER_IN_PLUGIN("in_prometheus_scrape")
 REGISTER_IN_PLUGIN("in_prometheus_textfile")
 REGISTER_IN_PLUGIN("in_emitter")

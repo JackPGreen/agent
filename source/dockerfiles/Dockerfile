@@ -55,6 +55,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     flex \
     bison \
     libyaml-dev \
+    libgit2-dev \
     && apt-get satisfy -y cmake "cmake (<< 4.0)" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -162,6 +163,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     liblzma5 \
     libyaml-0-2 \
     libcap2 \
+    libgit2-1.5 \
     && \
     mkdir -p /dpkg/var/lib/dpkg/status.d/ && \
     for deb in *.deb; do \
@@ -248,6 +250,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     libatomic1 \
     libgcrypt20 \
     libyaml-0-2 \
+    libgit2-1.5 \
     bash gdb valgrind build-essential  \
     git bash-completion vim tmux jq \
     dnsutils iputils-ping iputils-arping iputils-tracepath iputils-clockdiff \
@@ -256,7 +259,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     openssl \
     htop atop strace iotop sysstat ncdu logrotate hdparm pciutils psmisc tree pv \
     make tar flex bison \
-    libssl-dev libsasl2-dev libsystemd-dev/bookworm-backports zlib1g-dev libpq-dev libyaml-dev postgresql-server-dev-all \
+    libssl-dev libsasl2-dev libsystemd-dev/bookworm-backports zlib1g-dev libpq-dev libyaml-dev libgit2-dev postgresql-server-dev-all \
     && apt-get satisfy -y cmake "cmake (<< 4.0)" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

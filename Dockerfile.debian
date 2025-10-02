@@ -34,6 +34,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     flex \
     bison \
     libyaml-dev \
+    libgit2-dev \
     && apt-get satisfy -y cmake "cmake (<< 4.0)" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -150,6 +151,12 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     liblzma5 \
     libyaml-0-2 \
     libcap2 \
+    libgit2-1.5 \
+    libmbedtls14 \
+    libmbedx509-1 \
+    libmbedcrypto7 \
+    libhttp-parser2.9 \
+    libpcre2-8-0 \
     && \
     mkdir -p /dpkg/var/lib/dpkg/status.d/ && \
     for deb in *.deb; do \

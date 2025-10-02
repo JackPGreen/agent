@@ -120,8 +120,8 @@ jobs:
             -DOPENSSL_ROOT_DIR='C:\vcpkg\installed\${{ matrix.config.vcpkg_triplet }}' `
             ${{ matrix.config.cmake_additional_opt }} `
             -DFLB_LIBYAML_DIR='C:\vcpkg\installed\${{ matrix.config.vcpkg_triplet }}' `
-            -DLIBGIT2_INCLUDE_DIR='C:\vcpkg\installed\libgit2_${{ matrix.config.vcpkg_triplet }}\include' `
-            -DLIBGIT2_LIBRARY='C:\vcpkg\installed\libgit2_${{ matrix.config.vcpkg_triplet }}\git2.lib' `
+            -DLIBGIT2_INCLUDE_DIR='C:\vcpkg\installed\${{ matrix.config.vcpkg_triplet }}\include' `
+            -DLIBGIT2_LIBRARY='C:\vcpkg\installed\${{ matrix.config.vcpkg_triplet }}\lib\git2.lib' `
             -DFLB_IN_CALYPTIA_FLEET=Off `
             -DFLB_IN_DOCKER=Off `
             -DFLB_IN_DOCKER_EVENTS=Off `

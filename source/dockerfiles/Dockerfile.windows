@@ -154,6 +154,10 @@ RUN vcpkg install --recurse libyaml --triplet x64-windows-static; `
     Remove-Item -Path $env:TEMP\* -Recurse -Force -ErrorAction SilentlyContinue; `
     Remove-Item -Path C:\dev\vcpkg\buildtrees -Recurse -Force -ErrorAction SilentlyContinue;
 
+RUN vcpkg install --recurse libgit2 --triplet x64-windows-static; `
+    Remove-Item -Path $env:TEMP\* -Recurse -Force -ErrorAction SilentlyContinue; `
+    Remove-Item -Path C:\dev\vcpkg\buildtrees -Recurse -Force -ErrorAction SilentlyContinue;
+
 # Final vcpkg cleanup to remove all build artifacts and save space
 RUN Remove-Item -Path C:\dev\vcpkg\downloads -Recurse -Force -ErrorAction SilentlyContinue; `
     Remove-Item -Path C:\dev\vcpkg\buildtrees -Recurse -Force -ErrorAction SilentlyContinue; `
@@ -178,6 +182,8 @@ RUN call "%MSVS_HOME%\VC\Auxiliary\Build\vcvars64.bat" && `
     cmake -G "NMake Makefiles" `
       -DOPENSSL_ROOT_DIR='C:\dev\vcpkg\packages\openssl_x64-windows-static' `
       -DFLB_LIBYAML_DIR='C:\dev\vcpkg\packages\libyaml_x64-windows-static' `
+      -DLIBGIT2_INCLUDE_DIR='C:\dev\vcpkg\packages\libgit2_x64-windows-static\include' `
+      -DLIBGIT2_LIBRARY='C:\dev\vcpkg\packages\libgit2_x64-windows-static\lib\git2.lib' `
       -DFLB_SIMD=On `
       -DCMAKE_BUILD_TYPE=Release `
       -DFLB_SHARED_LIB=Off `
