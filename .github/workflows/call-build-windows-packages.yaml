@@ -151,7 +151,6 @@ jobs:
             -DFLB_SIMD=On `
             -DFLB_TRACE=Off `
             -DFLB_CHUNK_TRACE=Off `
-            -DFLB_PROCESSOR_DEDUP=Off `
             ../
           cmake --build .
           cpack
