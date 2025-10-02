@@ -17,10 +17,11 @@ RUN sed -i 's/enabled=0/enabled=1/g' /etc/yum.repos.d/Rocky-PowerTools.repo
 
 # hadolint ignore=DL3033
 RUN yum -y update && \
+    yum install -y epel-release && \
     yum install -y rpm-build curl ca-certificates gcc gcc-c++ cmake make bash \
     wget unzip systemd-devel wget flex bison \
     postgresql-libs postgresql-devel postgresql-server postgresql \
-    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel pkgconf-pkg-config && \
+    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel libgit2-devel pkgconf-pkg-config && \
     yum clean all
 
 # rockylinux/8.arm64v8 base image
@@ -34,10 +35,11 @@ RUN sed -i 's/enabled=0/enabled=1/g' /etc/yum.repos.d/Rocky-PowerTools.repo
 
 # hadolint ignore=DL3033
 RUN yum -y update && \
+    yum install -y epel-release && \
     yum install -y rpm-build curl ca-certificates gcc gcc-c++ cmake make bash \
     wget unzip systemd-devel wget flex bison \
     postgresql-libs postgresql-devel postgresql-server postgresql \
-    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel pkgconf-pkg-config && \
+    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel libgit2-devel pkgconf-pkg-config && \
     yum clean all
 
 # Need larger page size
@@ -51,10 +53,11 @@ RUN sed -i 's/enabled=0/enabled=1/g' /etc/yum.repos.d/rocky-devel.repo
 
 # hadolint ignore=DL3033
 RUN yum -y update && \
+    yum install -y epel-release && \
     yum install -y --allowerasing rpm-build curl ca-certificates gcc gcc-c++ cmake make bash \
     wget unzip systemd-devel wget flex bison \
     postgresql-libs postgresql-devel postgresql-server postgresql \
-    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel pkgconf-pkg-config && \
+    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel libgit2-devel pkgconf-pkg-config && \
     yum clean all
 
 # rockylinux/8.arm64v8 base image
@@ -68,10 +71,11 @@ RUN sed -i 's/enabled=0/enabled=1/g' /etc/yum.repos.d/rocky-devel.repo
 
 # hadolint ignore=DL3033
 RUN yum -y update && \
+    yum install -y epel-release && \
     yum install -y --allowerasing rpm-build curl ca-certificates gcc gcc-c++ cmake make bash \
     wget unzip systemd-devel wget flex bison \
     postgresql-libs postgresql-devel postgresql-server postgresql \
-    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel pkgconf-pkg-config && \
+    cyrus-sasl-lib openssl openssl-libs openssl-devel libyaml-devel libgit2-devel pkgconf-pkg-config && \
     yum clean all
 
 # Need larger page size

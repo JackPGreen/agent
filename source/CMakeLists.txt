@@ -630,6 +630,25 @@ else()
   include(cmake/cares.cmake)
 endif()
 
+# libgit2 (Git library) - REQUIRED for git_config plugin
+if(FLB_SYSTEM_WINDOWS)
+  # On Windows, use paths provided via CMake flags from Dockerfile
+  if(NOT LIBGIT2_INCLUDE_DIR OR NOT LIBGIT2_LIBRARY)
+    message(FATAL_ERROR "libgit2 is required but not found. Please install libgit2 and set LIBGIT2_INCLUDE_DIR and LIBGIT2_LIBRARY.")
+  endif()
+  set(LIBGIT2_FOUND TRUE)
+  set(LIBGIT2_INCLUDE_DIRS ${LIBGIT2_INCLUDE_DIR})
+  set(LIBGIT2_LIBRARIES ${LIBGIT2_LIBRARY})
+  include_directories(${LIBGIT2_INCLUDE_DIRS})
+else()
+  # On Unix-like systems, use pkg-config
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LIBGIT2 REQUIRED libgit2)
+  include_directories(${LIBGIT2_INCLUDE_DIRS})
+  link_directories(${LIBGIT2_LIBRARY_DIRS})
+endif()
+set(LIBGIT2_FOUND TRUE)
+
 # Chunk I/O
 FLB_OPTION(CIO_LIB_STATIC  ON)
 FLB_OPTION(CIO_LIB_SHARED  OFF)

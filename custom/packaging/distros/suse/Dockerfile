@@ -29,7 +29,7 @@ RUN set -x; \
     zypper --no-gpg-check refresh 'OSS Update' && \
     zypper --no-gpg-check refresh 'NON OSS Update' && \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
-    gcc gcc-c++ glibc-devel zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
+    gcc gcc-c++ glibc-devel zlib-devel rpm-build expect systemd-devel systemd-rpm-macros libgit2-devel && \
     # Remove expired root certificate.
     mv /var/lib/ca-certificates/pem/DST_Root_CA_X3.pem /etc/pki/trust/blacklist/ && \
     update-ca-certificates && \
@@ -46,7 +46,7 @@ FROM opensuse/leap:15.3 AS suse-15-base
 # hadolint ignore=DL3036,DL3037
 RUN set -x; \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
-    gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
+    gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros libgit2-devel && \
     # Allow fluent-bit to find systemd
     ln -fs /usr/lib/systemd /lib/systemd
 
@@ -61,7 +61,7 @@ COPY --from=multiarch-aarch64 /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64
 # hadolint ignore=DL3036,DL3037
 RUN set -x; \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
-    gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros && \
+    gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros libgit2-devel && \
     # Allow fluent-bit to find systemd
     ln -fs /usr/lib/systemd /lib/systemd
 

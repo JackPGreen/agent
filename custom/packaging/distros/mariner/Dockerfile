@@ -30,7 +30,7 @@ ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
 RUN tdnf -y update && \
     tdnf install -y bison cmake cyrus-sasl-devel flex gcc-c++ \
     gnutls-devel libpq-devel make openssl-devel pkgconfig systemd-devel systemd-rpm-macros zlib-devel \
-    binutils glibc-devel libyaml-devel kernel-headers file diffutils gawk rpm-build && \
+    binutils glibc-devel libyaml-devel libgit2-devel kernel-headers file diffutils gawk rpm-build && \
     tdnf clean all
 
 # Docker context must be the base of the repo
