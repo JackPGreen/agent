@@ -26,6 +26,7 @@
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_mp_chunk.h>
 #include <fluent-bit/flb_mp.h>
+#include <fluent-bit/flb_utils.h>
 #include <cfl/cfl_hash.h>
 #include <cfl/cfl_object.h>
 #include <time.h>
@@ -40,6 +41,10 @@ struct dedup_regex {
     struct mk_list _head;
 };
 
+#if !defined(S_ISDIR) && defined(S_IFMT) && defined(S_IFDIR)
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+
 static int ensure_directory(const char *path)
 {
     struct stat st;
@@ -51,7 +56,7 @@ static int ensure_directory(const char *path)
         return -1;
     }
 
-    if (mkdir(path, 0755) != 0) {
+    if (flb_utils_mkdir(path, 0755) != 0) {
         return -1;
     }
 

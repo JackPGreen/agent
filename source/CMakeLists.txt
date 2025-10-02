@@ -1154,10 +1154,6 @@ endif()
 # RocksDB (Deduplication Backend)
 # ================================
 if(FLB_PROCESSOR_DEDUP)
-  # Check if Windows - deduplication is not supported on Windows
-  if(FLB_SYSTEM_WINDOWS)
-    message(FATAL_ERROR "Record deduplication (FLB_PROCESSOR_DEDUP) is not supported on Windows platform")
-  endif()
   FLB_DEFINITION(FLB_HAVE_RECORD_DEDUP)
   # Use vendored RocksDB from lib/rocksdb
   include(cmake/rocksdb_vendored.cmake)
