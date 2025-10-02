@@ -41,6 +41,10 @@ struct dedup_regex {
     struct mk_list _head;
 };
 
+#if !defined(S_ISDIR) && defined(S_IFMT) && defined(S_IFDIR)
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+
 static int ensure_directory(const char *path)
 {
     struct stat st;
