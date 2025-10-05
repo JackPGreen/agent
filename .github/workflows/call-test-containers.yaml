@@ -52,6 +52,9 @@ jobs:
     env:
       IMAGE: ${{ inputs.image }}
       IMAGE_TAG: ${{ inputs.image-tag }}
+    permissions:
+      packages: read
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -69,6 +72,57 @@ jobs:
 
       - name: Run config tests
         run: ./testing/verify-config.sh
+        shell: bash
+
+  test-redhat-certification:
+    name: Test UBI container will pass certification
+    if: contains( inputs.image, 'ubi' )
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.github-token }}
+
+      - name: Set up preflight binary
+        run: |
+          curl -sSfLO https://github.com/redhat-openshift-ecosystem/openshift-preflight/releases/latest/download/preflight-linux-amd64
+          chmod a+x ./preflight-linux-amd64
+          ./preflight-linux-amd64 -v
+        shell: bash
+
+      - name: Run tests
+        run: ./preflight-linux-amd64 check container ${{ inputs.image }}:${{ inputs.image-tag }}
+        shell: bash
+
+      # https://github.com/redhat-openshift-ecosystem/openshift-preflight/issues/1235
+      # https://github.com/redhat-openshift-ecosystem/openshift-preflight/issues/535
+      - name: Ensure we pass as preflight does not use error code exit
+        run: |
+          if grep 'Preflight result: FAILED' preflight.log; then
+            echo "ERROR: failed checks"
+            exit 1
+          elif ! grep 'Preflight result: PASSED' preflight.log; then
+            echo "ERROR: checks did not pass"
+            exit 1
+          fi
+          echo "INFO: checks passed"
+        shell: bash
+
+      - name: Preflight log
+        continue-on-error: true
+        run: cat preflight.log
+        shell: bash
+
+      - name: Image debug
+        continue-on-error: true
+        run: |
+          docker pull ${{ inputs.image }}:${{ inputs.image-tag }}
+          docker inspect ${{ inputs.image }}:${{ inputs.image-tag }}
         shell: bash
 
   test-kubernetes:
@@ -93,6 +147,8 @@ jobs:
     needs:
       - test-kubernetes
       - test-container-config
+      # Sometimes skipped so we do not wait for it, if it fails will be caught higher up
+      # - test-redhat-certification
     steps:
       - name: All tests passed
         run: echo "All tests passed for ${{ inputs.image }}:${{ inputs.image-tag }}"
