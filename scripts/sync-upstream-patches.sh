@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="${SCRIPT_DIR}/.."
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 # Configuration
 UPSTREAM_REPO="https://github.com/fluent/fluent-bit.git"
@@ -23,12 +23,12 @@ PATCH_DIR="/tmp/fluent-bit-patches"
 CURRENT_VERSION_FILE="${SOURCE_DIR}/oss_version.txt"
 
 # Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+RED=${RED:-'\033[0;31m'}
+GREEN=${GREEN:-'\033[0;32m'}
+YELLOW=${YELLOW:-'\033[1;33m'}
+BLUE=${BLUE:-'\033[0;34m'}
+CYAN=${CYAN:-'\033[0;36m'}
+NC=${NC:-'\033[0m'}
 
 # Default values
 FROM_VERSION=""
@@ -50,12 +50,13 @@ ${GREEN}Required Arguments:${NC}
     --to VERSION      Target version (e.g., v4.0.11)
 
 ${GREEN}Options:${NC}
-    --dry-run         Show what would be done without applying patches
-    --no-interactive  Don't prompt for each patch
-    --auto-commit     Automatically commit after applying (with --single-commit)
-    --per-patch       Commit each patch individually (default)
-    --single-commit   Apply all patches then create one commit
-    -h, --help        Show this help message
+    --dry-run                 Show what would be done without applying patches
+    --no-interactive          Don't prompt for each patch
+    --auto-commit             Automatically commit after applying (with --single-commit)
+    --per-patch               Commit each patch individually (default)
+    --single-commit           Apply all patches then create one commit
+    -h, --help                Show this help message
+    --no-colours, --no-colors Disable control characters in output
 
 ${GREEN}Examples:${NC}
     # Interactive sync from v4.0.10 to v4.0.11
@@ -118,6 +119,15 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             ;;
+		--no-colours|--no-colors)
+			RED=''
+			GREEN=''
+			YELLOW=''
+			BLUE=''
+			CYAN=''
+			NC=''
+			shift
+			;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
             usage
@@ -178,6 +188,7 @@ setup_upstream() {
 
     log_info "Fetching versions from upstream..."
     git fetch "$UPSTREAM_REMOTE" "$FROM_VERSION" "$TO_VERSION" --no-tags 2>/dev/null
+	git fetch "$UPSTREAM_REMOTE" --tags 2>/dev/null
     log_success "Fetched upstream versions"
 }
 
@@ -227,23 +238,23 @@ analyze_patches() {
         case "$category" in
             TECHNICAL)
                 echo -e "${GREEN}[TECH]${NC} $commit_hash $description"
-                ((technical_count++))
+                ((technical_count++)) || true
                 ;;
             PACKAGING)
                 echo -e "${YELLOW}[PKG]${NC}  $commit_hash $description"
-                ((packaging_count++))
+                ((packaging_count++)) || true
                 ;;
             VERSION)
                 echo -e "${BLUE}[VER]${NC}  $commit_hash $description"
-                ((version_count++))
+                ((version_count++)) || true
                 ;;
             TESTS)
                 echo -e "${CYAN}[TEST]${NC} $commit_hash $description"
-                ((tests_count++))
+                ((tests_count++)) || true
                 ;;
             WORKFLOWS)
                 echo -e "${RED}[WF]${NC}   $commit_hash $description"
-                ((workflows_count++))
+                ((workflows_count++)) || true
                 ;;
         esac
     done
@@ -272,7 +283,7 @@ apply_patch() {
     original_dir=$(pwd)
 
     # Try different patch methods from within SOURCE_DIR
-    cd "$SOURCE_DIR"
+    cd "$SOURCE_DIR" || exit 1
 
     local applied=false
     local method=""
@@ -314,7 +325,7 @@ apply_patch() {
     fi
 
     # Go back to repo root
-    cd "$original_dir"
+    cd "$original_dir" || exit 1
 
     if [[ "$applied" == true ]]; then
         log_success "Applied: $commit_hash via $method"
