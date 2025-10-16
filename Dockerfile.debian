@@ -28,13 +28,12 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     pkg-config \
     libsystemd-dev/bookworm-backports \
     zlib1g-dev \
-    libpq-dev \
     flex \
     bison \
     libyaml-dev \
     libgit2-dev \
-    && apt-get satisfy -y cmake "cmake (<< 4.0)" \
-    && apt-get clean \
+    && apt-get satisfy -y cmake "cmake (<< 4.0)" && \
+    apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base-builder AS source-builder
@@ -45,7 +44,7 @@ ENV FLUENTBIT_VERSION=$FLUENT_BIT_VERSION
 ARG FLB_NIGHTLY_BUILD
 ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
 
-ARG FLUENTDO_AGENT_VERSION=25.10.2
+ARG FLUENTDO_AGENT_VERSION=25.10.3
 ENV FLUENTDO_AGENT_VERSION=${FLUENTDO_AGENT_VERSION}
 
 # Build metadata
@@ -81,6 +80,9 @@ WORKDIR /source/build/
 ARG CMAKE_EXTRA_ARGS
 ENV CMAKE_EXTRA_ARGS=${CMAKE_EXTRA_ARGS}
 
+# -DFLB_IN_EXEC=Off is to ensure in-exec is disabled for distroless containers without a shell
+# https://github.com/fluent/fluent-bit/issues/1758
+
 # We do not want word splitting for CMAKE_EXTRA_ARGS in case multiple are defined
 # hadolint ignore=SC2086
 RUN cmake -DCMAKE_BUILD_TYPE=Release \
@@ -93,6 +95,7 @@ RUN cmake -DCMAKE_BUILD_TYPE=Release \
     -DFLUENTDO_AGENT_PACKAGE_TYPE="$FLUENTDO_AGENT_PACKAGE_TYPE" \
     -DFLB_LOG_NO_CONTROL_CHARS=On \
     -DFLB_CORO_STACK_SIZE=131072 \
+    -DFLB_IN_EXEC=Off \
     ${CMAKE_EXTRA_ARGS} \
     ..
 

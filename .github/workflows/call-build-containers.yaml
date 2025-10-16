@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: "fluentdo"
+      amd-runner-label:
+        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
+        required: false
+        type: string
+        default: "namespace-profile-ubuntu-latest"
+      arm-runner-label:
+        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
+        required: false
+        type: string
+        default: "namespace-profile-ubuntu-latest-arm"
     secrets:
       cosign_private_key:
         description: The optional Cosign key to use for signing the images.
@@ -61,7 +71,7 @@ jobs:
         target:
           - production
     name: ${{ matrix.platform }}/${{ matrix.target }} container image build
-    runs-on: ${{ (contains(matrix.platform, 'arm') && 'namespace-profile-ubuntu-latest-arm') || 'namespace-profile-ubuntu-latest' }}
+    runs-on: ${{ (contains(matrix.platform, 'arm') && inputs.arm-runner-label) || inputs.amd-runner-label }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -70,12 +80,14 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      # Not required on Namespace and can break builds
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
+      # Must be removed on Namespace runners
+      - name: Set up QEMU
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-qemu-action@v3
 
-      # - name: Set up Docker Buildx
-      #   uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to docker.io for authorised pulls
         uses: docker/login-action@v3
@@ -97,10 +109,16 @@ jobs:
         with:
           labels: |
             build-date={{date 'YYYYMMDD-HHmmss'}}
-            vendor=FluentDo <https://fluent.do>
-            maintainer=FluentDo <info@fluent.do>
+            version=${{ inputs.version }}
+            io.k8s.description=FluentDo Agent is a stable, secure by default, OSS (Apache-licensed) downstream distribution of Fluent Bit with predictable releases and long-term supported versions for 24 months.
+            io.k8s.display-name=FluentDo Agent
+            io.openshift.tags=observability,logging,log-aggregation,fluentdo,fluent-bit
+            url=https://fluent.do
+            vendor=FluentDo at https://fluent.do
+            maintainer=FluentDo via info@fluent.do
             name=FluentDo Agent
             description=FluentDo Agent is a stable, secure by default, OSS (Apache-licensed) downstream distribution of Fluent Bit with predictable releases and long-term supported versions for 24 months.
+            summary=FluentDo Agent is an Enterprise hardened version of Fluent Bit
 
       - name: Build and push by digest the standard ${{ matrix.target }} image
         id: production
@@ -165,8 +183,6 @@ jobs:
           tags: |
             # Ensure we strip the 'v' prefix
             type=semver,pattern={{version}},event=tag
-            # Add the input version as well for releases
-            type=raw,value=${{ inputs.version }},event=tag
             # defaults for others
             type=schedule
             type=ref,event=branch

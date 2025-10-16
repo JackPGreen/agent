@@ -18,10 +18,8 @@ PATCH_DIR=${PATCH_DIR:-$REPO_ROOT/patches}
 PATCH_LIST=${PATCH_LIST:-$PATCH_DIR/patches-agent.files}
 CUSTOM_DIR=${CUSTOM_DIR:-$REPO_ROOT/custom}
 
-export UPSTREAM_VERSION=${UPSTREAM_VERSION:-v4.0.5}
-
 # Change via ./scripts/update-version.sh only
-export FLUENTDO_AGENT_VERSION=${FLUENTDO_AGENT_VERSION:-25.10.2}
+export FLUENTDO_AGENT_VERSION=${FLUENTDO_AGENT_VERSION:-25.10.3}
 
 # Handle version string with or without a v prefix - we just want semver
 if [[ "$FLUENTDO_AGENT_VERSION" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]] ; then
@@ -44,11 +42,6 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
 fi
 
 exitCode=0
-
-# Copy over any custom code if it exists
-if [[ -d "$CUSTOM_DIR" ]] && [[ "$(ls -A "$CUSTOM_DIR" 2>/dev/null)" ]]; then
-    cp -Rfv "$CUSTOM_DIR/"* "$SOURCE_DIR/"
-fi
 
 echo "Applying patches"
 # If we have a patch config file then we use that to iterate through and apply patches

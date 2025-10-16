@@ -4,7 +4,6 @@ on:
   pull_request:
     types:
       - opened
-      - edited
       - synchronize
       - reopened
       - labeled
@@ -121,70 +120,64 @@ jobs:
       # Pick the Dockerfile to use for each image
       definition: ${{ (contains(matrix.image-base, 'debian') && 'Dockerfile.debian') || 'Dockerfile.ubi' }}
       dockerhub-username: ${{ vars.DOCKERHUB_USERNAME }}
+      # Request to build on self-hosted runners if this is a PR and we have the label set, otherwise use the standard runners
+      amd-runner-label: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-self-hosted') && 'self-ubuntu-latest') || 'namespace-profile-ubuntu-latest' }}
+      # No self-hosted ARM runners yet so always use the standard ones
+      # arm-runner-label: "namespace-profile-ubuntu-latest-arm"
+    secrets:
+      dockerhub-token: ${{ secrets.DOCKERHUB_PUBLIC_READ_TOKEN }}
+      cosign_private_key: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      cosign_private_key_password: ${{ secrets.COSIGN_PASSWORD }}
+
+  build-linux:
+    # Only build Linux packages if we are not a pull request or have a label set
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') || contains(github.event.pull_request.labels.*.name, 'build-linux') }}
+    uses: ./.github/workflows/call-build-linux-packages.yaml
+    needs:
+      - get-meta
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      target-matrix: ${{ needs.get-meta.outputs.linux-targets }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
+      dockerhub-username: ${{ vars.DOCKERHUB_USERNAME }}
+      # Request to build on self-hosted runners if this is a PR and we have the label set, otherwise use the standard runners
+      amd-runner-label: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-self-hosted') && 'self-ubuntu-latest') || 'namespace-profile-ubuntu-latest' }}
+      large-amd-runner-label: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'build-self-hosted') && 'self-ubuntu-latest') || 'namespace-profile-ubuntu-latest-4cpu-16gb' }}
+      # No self-hosted ARM runners yet so always use the standard ones
+      # arm-runner-label: "namespace-profile-ubuntu-latest-arm"
     secrets:
       dockerhub-token: ${{ secrets.DOCKERHUB_PUBLIC_READ_TOKEN }}
 
+  build-windows:
+    # Only build Windows packages if we are not a pull request or have a label set
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') || contains(github.event.pull_request.labels.*.name, 'build-windows') }}
+    uses: ./.github/workflows/call-build-windows-packages.yaml
+    needs:
+      - get-meta
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
 
   # We want to copy the UBI image to ghcr.io/fluentdo/agent:version and
   # the distroless image to ghcr.io/fluentdo/agent:version-slim
   copy-common-images:
     # Only run for releases to reduce unnecessary load on the registry
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    name: Copy common container images to main image names
+    name: Promote release images
     needs:
       - get-meta
       - build-image
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      # This is used to complete the identity challenge
-      # with sigstore/fulcio when running outside of PRs.
       id-token: write
-    env:
-      UBI_IMAGE_NAME: ghcr.io/fluentdo/agent/ubi
-      DISTROLESS_IMAGE_NAME: ghcr.io/fluentdo/agent/debian
-      OUTPUT_IMAGE_NAME: ghcr.io/fluentdo/agent
-      TAG: ${{ needs.build-image.outputs.version }}
-    steps:
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Promote UBI images
-        run: |
-          docker pull "$UBI_IMAGE_NAME:$TAG"
-          docker run --rm  \
-            quay.io/skopeo/stable:latest \
-            copy \
-              --all \
-              --retry-times 10 \
-              --src-no-creds \
-              --dest-creds "$DEST_CREDS" \
-              "docker://$UBI_IMAGE_NAME:$TAG" \
-              "docker://$OUTPUT_IMAGE_NAME:$TAG"
-        env:
-          DEST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-
-      - name: Promote distroless images
-        run: |
-          docker pull "$DISTROLESS_IMAGE_NAME:$TAG"
-          docker run --rm  \
-            quay.io/skopeo/stable:latest \
-            copy \
-              --all \
-              --retry-times 10 \
-              --src-no-creds \
-              --dest-creds "$DEST_CREDS" \
-              "docker://$DISTROLESS_IMAGE_NAME:$TAG" \
-              "docker://$OUTPUT_IMAGE_NAME:${TAG:?}-slim"
-        env:
-          DEST_CREDS: ${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}
-        shell: bash
+    uses: ./.github/workflows/call-publish-release-images.yaml
+    with:
+      version: ${{ needs.build-image.outputs.version }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
 
   test-containers:
     name: Test container images
@@ -207,38 +200,31 @@ jobs:
           - "ghcr.io/fluentdo/agent/ubi"
           - "ghcr.io/fluentdo/agent/debian"
 
-  build-linux:
-    # Only build Linux packages if we are not a pull request or have a label set
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') || contains(github.event.pull_request.labels.*.name, 'build-linux') }}
-    uses: ./.github/workflows/call-build-linux-packages.yaml
-    needs:
-      - get-meta
-    with:
-      ref: ${{ github.ref }}
-      target-matrix: ${{ needs.get-meta.outputs.linux-targets }}
-      nightly-build-info: ${{ needs.get-meta.outputs.date }}
-      dockerhub-username: ${{ vars.DOCKERHUB_USERNAME }}
-    secrets:
-      dockerhub-token: ${{ secrets.DOCKERHUB_PUBLIC_READ_TOKEN }}
-
-  build-windows:
-    # Only build Windows packages if we are not a pull request or have a label set
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') || contains(github.event.pull_request.labels.*.name, 'build-windows') }}
-    uses: ./.github/workflows/call-build-windows-packages.yaml
-    needs:
-      - get-meta
-    with:
-      ref: ${{ github.ref }}
-      nightly-build-info: ${{ needs.get-meta.outputs.date }}
-
-  # Placeholder to make it simple to create a status check on this, do not change name
+  # Placeholder to make it simple to create a status check on this, do not change name.
+  # Instead of modifying branch protection rules every time we add a new job, we just
+  # add it as a dependency of this job.
+  # This job must always run last so it depends on all other jobs that must complete.
+  # Note that jobs that are conditionally run (e.g. not on PRs) must be excluded here.
+  # If you add a new job that must complete then add it here.
   tests-complete:
     name: All tests complete
+    # We use this to always run even if a previous job fails or is skipped (which we check for)
+    if: always()
     needs:
+      - build-linux
+      - build-windows
+      - build-image
       - test-containers
       # Add additional jobs here as required that must complete
     runs-on: ubuntu-latest
     steps:
+      - name: Decide whether the needed jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          # Add any jobs that can be skipped here to avoid failure of this job
+          allowed-skips: build-linux,build-windows
+          # Convert the needs object to JSON to pass it in
+          jobs: ${{ toJSON(needs) }}
       - name: All tests complete
         run: echo "All tests complete"
         shell: bash
@@ -250,6 +236,7 @@ jobs:
     needs:
       - get-meta
       - build-image
+      # We need packages to be built for a release
       - build-linux
       - build-windows
       # Deliberately exclude the following for a release and also to dry run PRs
@@ -276,6 +263,8 @@ jobs:
             *package*
 
       - name: Package into a single tarball so we can have individual distributions
+        # No packages unless we use specific labels for a PR
+        if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'build-packages') || contains(github.event.pull_request.labels.*.name, 'build-linux') || contains(github.event.pull_request.labels.*.name, 'build-windows') }}
         run: |
           tar -czvf $GITHUB_WORKSPACE/deliverables.tar.gz -C output .
         shell: bash
@@ -293,7 +282,7 @@ jobs:
           artifact-name: image-ubi-sbom.spdx
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
-          output-file: output/image-ubi-sbom.spdx
+          output-file: image-ubi-sbom.spdx
 
       - uses: anchore/sbom-action@v0
         with:
@@ -301,10 +290,11 @@ jobs:
           artifact-name: image-debian-sbom.spdx
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
-          output-file: output/image-debian-sbom.spdx
+          output-file: image-debian-sbom.spdx
 
       - name: Save image as tarball
         run: |
+          mkdir -p output
           skopeo copy \
             --all \
             --remove-signatures \
@@ -327,6 +317,14 @@ jobs:
           jq '. += { "oss_version": "${{ needs.get-meta.outputs.oss-version }}"}' build-config.json | tee output/release.json
         shell: bash
 
+      - name: Make nice Linux targets list
+        id: linux-targets
+        run: |
+          LINUX_TARGETS=$(echo '${{ needs.get-meta.outputs.linux-targets }}' | jq -r '. | join(", ")')
+          echo "linux-targets=$LINUX_TARGETS"
+          echo "linux-targets=$LINUX_TARGETS" >> $GITHUB_OUTPUT
+        shell: bash
+
       - name: Debug
         if: always()
         run: ls -lR
@@ -346,13 +344,14 @@ jobs:
 
             Targets:
               - Windows: 2022/2025
-              - Linux: ${{ needs.get-meta.outputs.linux-targets }}
+              - Linux: ${{ steps.linux-targets.outputs.linux-targets }}
 
             Images:
               - ${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}
               - ${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}
           files: |
-            output/*.spdx
+            install.sh
+            *.spdx
             output/*.json
             deliverables.tar.gz
             output/fluent-do-agent-container.tar.gz
@@ -361,6 +360,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
 
       - name: Authenticate with GCP
+        if: ${{ github.event_name != 'pull_request' }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: "projects/841522437311/locations/global/workloadIdentityPools/github-actions/providers/github-actions"
@@ -445,6 +445,7 @@ jobs:
           export_environment_variables: true
 
       - id: get-secrets
+        if: ${{ github.event_name != 'pull_request' }}
         name: Get secrets from GCP Secret Manager
         # This step retrieves secrets from GCP Secret Manager and sets them as outputs
         # The secrets can then be accessed in subsequent steps using ${{ steps.get-secrets.outputs.<secret_name> }}

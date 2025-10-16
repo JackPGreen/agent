@@ -11,6 +11,9 @@ ARG BASE_BUILDER
 # from the cmake download site. This is the version used.
 ARG CMAKE_VERSION=3.31.6
 
+# Used to differentiate in CI from main/PR builds
+ARG CACHE_ID=main
+
 # Multiarch support
 FROM multiarch/qemu-user-static:x86_64-aarch64 as multiarch-aarch64
 
@@ -20,10 +23,12 @@ FROM multiarch/qemu-user-static:x86_64-aarch64 as multiarch-aarch64
 FROM opensuse/archive:42.3 AS suse-12-base
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG CACHE_ID
 # zypper/libcurl has a use-after-free bug that causes segfaults for particular download sequences.
 # If this bug happens to trigger in the future, adding a "zypper -n download" of a subset of the packages can avoid the segfault.
 # hadolint ignore=DL3036,DL3037
-RUN set -x; \
+RUN --mount=type=cache,target=/var/cache/zypp,sharing=locked,id=suse-12-${CACHE_ID} \
+    set -x; \
     # The repo signatures are no longer valid
     # TODO: use checksum verification on updates
     zypper --no-gpg-check refresh 'OSS Update' && \
@@ -40,11 +45,16 @@ RUN set -x; \
 ARG FLB_PROCESSOR_DEDUP=Off
 ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
 
+ARG FLB_JEMALLOC_OPTIONS
+ENV FLB_JEMALLOC_OPTIONS=${FLB_JEMALLOC_OPTIONS}
+
 # suse/15 base image
 FROM opensuse/leap:15.3 AS suse-15-base
 
+ARG CACHE_ID
 # hadolint ignore=DL3036,DL3037
-RUN set -x; \
+RUN --mount=type=cache,target=/var/cache/zypp,sharing=locked,id=suse-15-${CACHE_ID} \
+    set -x; \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
     gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros libgit2-devel && \
     # Allow fluent-bit to find systemd
@@ -58,8 +68,10 @@ ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
 FROM --platform=arm64 opensuse/leap:15.3 AS suse-15.arm64v8-base
 COPY --from=multiarch-aarch64 /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64-static
 
+ARG CACHE_ID
 # hadolint ignore=DL3036,DL3037
-RUN set -x; \
+RUN --mount=type=cache,target=/var/cache/zypp,sharing=locked,id=suse-15-arm64-${CACHE_ID} \
+    set -x; \
     zypper -n install curl tar git systemd autoconf automake flex libtool libcurl-devel libopenssl-devel libyajl-devel \
     gcc gcc-c++ zlib-devel rpm-build expect systemd-devel systemd-rpm-macros libgit2-devel && \
     # Allow fluent-bit to find systemd
@@ -67,6 +79,9 @@ RUN set -x; \
 
 ARG FLB_PROCESSOR_DEDUP=On
 ENV FLB_PROCESSOR_DEDUP=$FLB_PROCESSOR_DEDUP
+
+ARG FLB_JEMALLOC_OPTIONS
+ENV FLB_JEMALLOC_OPTIONS=${FLB_JEMALLOC_OPTIONS}
 
 # Common build for all distributions now
 # hadolint ignore=DL3006
@@ -104,17 +119,17 @@ RUN ./Configure && make -j "$(getconf _NPROCESSORS_ONLN)" && make install
 ARG FLB_NIGHTLY_BUILD
 ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
 
+ARG FLB_JEMALLOC_OPTIONS
+ENV FLB_JEMALLOC_OPTIONS=${FLB_JEMALLOC_OPTIONS}
+
 # Docker context must be the base of the repo
 WORKDIR /source/fluent-bit/
 COPY . ./
 
 WORKDIR /source/fluent-bit/build/
 # CMake configuration variables
-# Unused
-ARG CFLAGS
 ARG CMAKE_INSTALL_PREFIX=/opt/fluent-bit/
 ARG CMAKE_INSTALL_SYSCONFDIR=/etc/
-ARG FLB_RELEASE=On
 
 # No YAML support
 ARG FLB_CONFIG_YAML=Off
@@ -124,8 +139,8 @@ ARG WITH_CURL=Off
 RUN cmake -DCMAKE_INSTALL_PREFIX="$CMAKE_INSTALL_PREFIX" \
     -DCMAKE_RULE_MESSAGES:BOOL=OFF -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
     -DCMAKE_INSTALL_SYSCONFDIR="$CMAKE_INSTALL_SYSCONFDIR" \
-    -DFLB_RELEASE="$FLB_RELEASE" \
     -DFLB_NIGHTLY_BUILD="$FLB_NIGHTLY_BUILD" \
+    -DFLB_JEMALLOC_OPTIONS="$FLB_JEMALLOC_OPTIONS" \
     -DFLB_CONFIG_YAML="${FLB_CONFIG_YAML}" \
     -DWITH_CURL="${WITH_CURL}" \
     -DFLB_PROCESSOR_DEDUP="${FLB_PROCESSOR_DEDUP}" \

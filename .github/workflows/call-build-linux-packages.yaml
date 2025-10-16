@@ -7,6 +7,10 @@ on:
         description: The build matrix of targets as a JSON build matrix.
         required: true
         type: string
+      version:
+        description: The version we are building for (as a numeric value 1.2.3).
+        required: true
+        type: string
       ref:
         description: The commit, SHA or branch to use in this repository.
         required: false
@@ -22,7 +26,21 @@ on:
         required: false
         type: string
         default: "fluentdo"
-
+      amd-runner-label:
+        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
+        required: false
+        type: string
+        default: "namespace-profile-ubuntu-latest"
+      arm-runner-label:
+        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
+        required: false
+        type: string
+        default: "namespace-profile-ubuntu-latest-arm"
+      large-amd-runner-label:
+        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
+        required: false
+        type: string
+        default: 'namespace-profile-ubuntu-latest-4cpu-16gb'
     secrets:
       gpg_private_key:
         description: The optional GPG key to use for signing the packages.
@@ -36,7 +54,7 @@ on:
 jobs:
   build-packages:
     name: agent - ${{ matrix.distro }} package build and upload
-    runs-on: ${{ (contains(matrix.distro, 'arm') && 'namespace-profile-ubuntu-latest-arm') || (contains(matrix.distro, 'centos/6') && 'namespace-profile-ubuntu-latest-4cpu-16gb') || 'namespace-profile-ubuntu-latest' }}
+    runs-on: ${{ (contains(matrix.distro, 'arm') && inputs.arm-runner-label) || (contains(matrix.distro, 'centos/6') && inputs.large-amd-runner-label) || inputs.amd-runner-label }}
     permissions:
       contents: read
       packages: read
@@ -51,12 +69,24 @@ jobs:
           ref: ${{ inputs.ref }}
           repository: FluentDo/agent
 
-      # Not required on Namespace and can break builds
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
+      - name: Ensure we apply specific version from tag
+        run: ./scripts/setup-code.sh
+        shell: bash
+        env:
+          FLUENTDO_AGENT_VERSION: ${{ inputs.version }}
 
-      # - name: Set up Docker Buildx
-      #   uses: docker/setup-buildx-action@v3
+      - name: Deltas
+        run: git diff
+        shell: bash
+
+      # Must be removed on Namespace runners
+      - name: Set up QEMU
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-buildx-action@v3
 
       - name: Format the matrix string
         uses: frabert/replace-string-action@v2.5
@@ -91,70 +121,8 @@ jobs:
           FLB_DISTRO: ${{ matrix.distro }}
           FLB_OUT_DIR: agent
           FLB_NIGHTLY_BUILD: ${{ inputs.nightly-build-info }}
-
-          # Ensure we do not use any defaults from upstream, use our hardened config.
-          FLB_IN_CALYPTIA_FLEET: Off
-          FLB_IN_DOCKER: Off
-          FLB_IN_DOCKER_EVENTS: Off
-          FLB_IN_EXEC_WASI: Off
-          FLB_IN_MQTT: Off
-          FLB_IN_NETIF: Off
-          FLB_IN_NGINX_EXPORTER_METRICS: Off
-          FLB_IN_SERIAL: Off
-          FLB_IN_THERMAL: Off
-          FLB_FILTER_ALTER_SIZE: Off
-          FLB_FILTER_CHECKLIST: Off
-          FLB_FILTER_GEOIP2: Off
-          FLB_FILTER_NIGHTFALL: Off
-          FLB_FILTER_WASM: Off
-          FLB_OUT_CALYPTIA: Off
-          FLB_OUT_LOGDNA: Off
-          FLB_OUT_PGSQL: Off
-          FLB_OUT_TD: Off
-          FLB_OUT_VIVO_EXPORTER: Off
-
-          FLB_STREAM_PROCESSOR: Off
-          FLB_WASM: Off
-          FLB_ZIG: Off
-          FLB_PROXY_GO: Off
-          FLB_SHARED_LIB: Off
-          FLB_EXAMPLES: Off
-          FLB_RELEASE: On
-          FLB_SIMD: On
-          FLB_TRACE: Off
-          FLB_CHUNK_TRACE: Off
-
-          # Pass all the above as build args to ensure they are used in the docker build, this is the way build.sh passes them.
-          FLB_ARG: |
-            --build-arg FLB_IN_CALYPTIA_FLEET=Off
-            --build-arg FLB_IN_DOCKER=Off
-            --build-arg FLB_IN_DOCKER_EVENTS=Off
-            --build-arg FLB_IN_EXEC_WASI=Off
-            --build-arg FLB_IN_MQTT=Off
-            --build-arg FLB_IN_NETIF=Off
-            --build-arg FLB_IN_NGINX_EXPORTER_METRICS=Off
-            --build-arg FLB_IN_SERIAL=Off
-            --build-arg FLB_IN_THERMAL=Off
-            --build-arg FLB_FILTER_ALTER_SIZE=Off
-            --build-arg FLB_FILTER_CHECKLIST=Off
-            --build-arg FLB_FILTER_GEOIP2=Off
-            --build-arg FLB_FILTER_NIGHTFALL=Off
-            --build-arg FLB_FILTER_WASM=Off
-            --build-arg FLB_OUT_CALYPTIA=Off
-            --build-arg FLB_OUT_LOGDNA=Off
-            --build-arg FLB_OUT_PGSQL=Off
-            --build-arg FLB_OUT_TD=Off
-            --build-arg FLB_OUT_VIVO_EXPORTER=Off
-            --build-arg FLB_STREAM_PROCESSOR=Off
-            --build-arg FLB_WASM=Off
-            --build-arg FLB_ZIG=Off
-            --build-arg FLB_PROXY_GO=Off
-            --build-arg FLB_SHARED_LIB=Off
-            --build-arg FLB_EXAMPLES=Off
-            --build-arg FLB_RELEASE=On
-            --build-arg FLB_SIMD=On
-            --build-arg FLB_TRACE=Off
-            --build-arg FLB_CHUNK_TRACE=Off
+          # Optionally use separate caches for PRs to mainline
+          # CACHE_ID: ${{ github.event_name != 'pull_request' && 'main' || 'pr' }}
         working-directory: source/packaging
         shell: bash
 

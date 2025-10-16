@@ -85,16 +85,21 @@ To specify a different configuration just mount it in as well and pass it on the
 
 ### Package Installation
 
+All packages are available for download at <https://packages.fluent.do>.
+
+Linux packages are available for download and installation or using a simple install script:
+
 ```bash
-# Debian/Ubuntu
-apt-get install fluentdo-agent
+curl -sSfL https://raw.githubusercontent.com/FluentDo/agent/refs/heads/main/install.sh | bash
+```
 
-# RHEL/CentOS
-yum install fluentdo-agent
+For macOS a brew tap recipe is provided:
 
-# macOS
+```bash
 brew install fluentdo/tap/agent
 ```
+
+Windows packages are also available for download in various formats (ZIP, EXE or MSI).
 
 ### Building from Source
 
@@ -152,6 +157,10 @@ Refer to the CI for full examples of different target builds:
 ---
 
 ## Security
+
+The Cosign key for our images is [provided](./cosign.pub) in this repo.
+
+Follow the documentation to verify against it: <https://docs.sigstore.dev/cosign/verifying/verify/>.
 
 ### Reporting Security Issues
 

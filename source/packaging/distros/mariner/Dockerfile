@@ -4,16 +4,39 @@ ARG BASE_BUILDER=mariner-2-base
 # Lookup the name to use below but should follow the '<distro>-base' convention with slashes replaced.
 # Use buildkit to skip unused base images: DOCKER_BUILDKIT=1
 
-# AMD64 base image
-FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as mariner-2-base
+# Used to differentiate in CI from main/PR builds
+ARG CACHE_ID=main
 
 # ARM64 base image
 FROM multiarch/qemu-user-static:x86_64-aarch64 as multiarch-aarch64
+
+# AMD64 base image
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 as mariner-2-base
+
+ARG CACHE_ID
+RUN --mount=type=cache,target=/var/cache/tdnf,sharing=locked,id=mariner-2-${CACHE_ID} \
+    tdnf -y update && \
+    tdnf install -y bison cmake cyrus-sasl-devel flex gcc-c++ \
+    gnutls-devel make openssl-devel pkgconfig systemd-devel systemd-rpm-macros zlib-devel \
+    binutils glibc-devel libyaml-devel libgit2-devel kernel-headers file diffutils gawk rpm-build
+
+# Split into separate layer to allow caching of above
+RUN tdnf clean all
 
 # hadolint ignore=DL3029
 FROM --platform=arm64 mcr.microsoft.com/cbl-mariner/base/core:2.0 as mariner-2.arm64v8-base
 
 COPY --from=multiarch-aarch64 /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64-static
+
+ARG CACHE_ID
+RUN --mount=type=cache,target=/var/cache/tdnf,sharing=locked,id=mariner-2-arm64-${CACHE_ID} \
+    tdnf -y update && \
+    tdnf install -y bison cmake cyrus-sasl-devel flex gcc-c++ \
+    gnutls-devel make openssl-devel pkgconfig systemd-devel systemd-rpm-macros zlib-devel \
+    binutils glibc-devel libyaml-devel libgit2-devel kernel-headers file diffutils gawk rpm-build
+
+# Split into separate layer to allow caching of above
+RUN tdnf clean all
 
 # Need larger page size - using RHEL compatible options
 ARG FLB_JEMALLOC_OPTIONS="--with-lg-page=16 --with-lg-quantum=3"
@@ -26,21 +49,12 @@ FROM $BASE_BUILDER as builder
 ARG FLB_NIGHTLY_BUILD
 ENV FLB_NIGHTLY_BUILD=$FLB_NIGHTLY_BUILD
 
-# hadolint ignore=DL3033
-RUN tdnf -y update && \
-    tdnf install -y bison cmake cyrus-sasl-devel flex gcc-c++ \
-    gnutls-devel libpq-devel make openssl-devel pkgconfig systemd-devel systemd-rpm-macros zlib-devel \
-    binutils glibc-devel libyaml-devel libgit2-devel kernel-headers file diffutils gawk rpm-build && \
-    tdnf clean all
-
 # Docker context must be the base of the repo
 WORKDIR /source/fluent-bit/
 COPY . ./
 
 WORKDIR /source/fluent-bit/build/
 # CMake configuration variables
-# Unused
-ARG CFLAGS
 ARG CMAKE_INSTALL_PREFIX=/opt/fluent-do-agent/
 ARG CMAKE_INSTALL_SYSCONFDIR=/etc/
 
