@@ -123,6 +123,8 @@ struct flb_graphql_create_agent_input {
     const char *config;          /* Required */
     const char *os;              /* Required */
     const char *arch;            /* Required */
+    const char *distro;          /* Optional: distribution name (e.g., debian, ubuntu, amazonlinux) */
+    const char *package_type;    /* Optional: CONTAINER or PACKAGE */
     struct mk_list *labels;      /* Optional: list of labels (key-value pairs) */
 };
 
@@ -186,6 +188,8 @@ int flb_graphql_create_agent(struct flb_graphql_client *client,
 int flb_graphql_update_agent(struct flb_graphql_client *client,
                              const char *agent_id,
                              const char *config,
+                             const char *distro,
+                             const char *package_type,
                              struct mk_list *labels);
 
 /* Mutation: Add metrics */

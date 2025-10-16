@@ -46,6 +46,10 @@
 #define FLUENTDO_DEFAULT_INTERVAL 60
 #define FLUENTDO_SESSION_FILE "session"
 
+/* Macro for stringifying build metadata */
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
 /* Plugin context */
 struct flb_in_fluentdo {
     struct flb_graphql_client *graphql_client;
@@ -453,10 +457,13 @@ static int cb_fluentdo_init(struct flb_input_instance *ins,
     struct flb_in_fluentdo *ctx;
     struct flb_graphql_create_agent_input input;
     struct flb_graphql_create_agent_result result;
+    struct flb_graphql_client *update_client;
     char os[64];
     char arch[64];
     char version[32];
     flb_sds_t config_content = NULL;
+    const char *distro = NULL;
+    const char *package_type = NULL;
 
     ctx = flb_calloc(1, sizeof(struct flb_in_fluentdo));
     if (!ctx) {
@@ -508,6 +515,27 @@ static int cb_fluentdo_init(struct flb_input_instance *ins,
 
     /* Parse labels from configuration */
     ctx->labels = parse_labels(ins, ctx->label_list);
+
+    /* Log startup information */
+    flb_plg_info(ins, "version=%s, commit=%s, pid=%d, distro=%s, packageType=%s",
+                 FLB_VERSION_STR,
+#ifdef FLB_GIT_HASH
+                 FLB_GIT_HASH,
+#else
+                 "unknown",
+#endif
+                 (int)getpid(),
+#ifdef FLUENTDO_AGENT_DISTRO
+                 TOSTRING(FLUENTDO_AGENT_DISTRO),
+#else
+                 "unknown",
+#endif
+#ifdef FLUENTDO_AGENT_PACKAGE_TYPE
+                 TOSTRING(FLUENTDO_AGENT_PACKAGE_TYPE)
+#else
+                 "unknown"
+#endif
+    );
 
     /* Create GraphQL client (needed for both registration and metrics/labels) */
     ctx->graphql_client = flb_graphql_client_create(ctx->api_url, ctx->api_token,
@@ -569,8 +597,23 @@ static int cb_fluentdo_init(struct flb_input_instance *ins,
         input.arch = arch;
         input.labels = ctx->labels;
 
-        flb_plg_info(ins, "registering agent: name=%s, kind=%s, version=%s, os=%s, arch=%s",
-                     input.name, input.kind, input.version, input.os, input.arch);
+        /* Set build metadata if available */
+#ifdef FLUENTDO_AGENT_DISTRO
+        input.distro = TOSTRING(FLUENTDO_AGENT_DISTRO);
+#else
+        input.distro = NULL;
+#endif
+
+#ifdef FLUENTDO_AGENT_PACKAGE_TYPE
+        input.package_type = TOSTRING(FLUENTDO_AGENT_PACKAGE_TYPE);
+#else
+        input.package_type = NULL;
+#endif
+
+        flb_plg_info(ins, "registering agent: name=%s, kind=%s, version=%s, os=%s, arch=%s, distro=%s, packageType=%s",
+                     input.name, input.kind, input.version, input.os, input.arch,
+                     input.distro ? input.distro : "unset",
+                     input.package_type ? input.package_type : "unset");
 
         /* Log label count */
         if (ctx->labels && mk_list_size(ctx->labels) > 0) {
@@ -631,7 +674,14 @@ static int cb_fluentdo_init(struct flb_input_instance *ins,
 
         /* Update agent config and labels using agent token */
         if (config_content || (ctx->labels && mk_list_size(ctx->labels) > 0)) {
-            struct flb_graphql_client *update_client;
+            /* Set build metadata if available */
+#ifdef FLUENTDO_AGENT_DISTRO
+            distro = TOSTRING(FLUENTDO_AGENT_DISTRO);
+#endif
+
+#ifdef FLUENTDO_AGENT_PACKAGE_TYPE
+            package_type = TOSTRING(FLUENTDO_AGENT_PACKAGE_TYPE);
+#endif
 
             /* Create GraphQL client with agent token for update */
             update_client = flb_graphql_client_create(ctx->api_url, ctx->agent_token,
@@ -644,7 +694,7 @@ static int cb_fluentdo_init(struct flb_input_instance *ins,
             }
             else {
                 ret = flb_graphql_update_agent(update_client, ctx->agent_id,
-                                              config_content, ctx->labels);
+                                              config_content, distro, package_type, ctx->labels);
                 if (ret == 0) {
                     flb_plg_info(ins, "agent updated successfully");
                 }

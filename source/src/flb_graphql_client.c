@@ -699,6 +699,12 @@ int flb_graphql_create_agent(struct flb_graphql_client *client,
     int fields = 6; /* Required fields */
 
     /* Count optional fields */
+    if (input->distro) {
+        fields++;
+    }
+    if (input->package_type) {
+        fields++;
+    }
     if (input->labels && mk_list_size(input->labels) > 0) {
         fields++; /* Add labels field if present */
     }
@@ -724,6 +730,14 @@ int flb_graphql_create_agent(struct flb_graphql_client *client,
     pack_kv(&mp_pck, "config", input->config);
     pack_kv(&mp_pck, "os", input->os);
     pack_kv(&mp_pck, "arch", input->arch);
+
+    /* Optional distro and package_type */
+    if (input->distro) {
+        pack_kv(&mp_pck, "distro", input->distro);
+    }
+    if (input->package_type) {
+        pack_kv(&mp_pck, "packageType", input->package_type);
+    }
 
     /* Optional labels (as Map/object) */
     if (input->labels && mk_list_size(input->labels) > 0) {
@@ -884,6 +898,8 @@ int flb_graphql_add_metrics(struct flb_graphql_client *client,
 int flb_graphql_update_agent(struct flb_graphql_client *client,
                              const char *agent_id,
                              const char *config,
+                             const char *distro,
+                             const char *package_type,
                              struct mk_list *labels)
 {
     flb_sds_t query = NULL;
@@ -911,6 +927,12 @@ int flb_graphql_update_agent(struct flb_graphql_client *client,
     if (config) {
         fields++;
     }
+    if (distro) {
+        fields++;
+    }
+    if (package_type) {
+        fields++;
+    }
     if (labels && mk_list_size(labels) > 0) {
         fields++;
     }
@@ -931,6 +953,14 @@ int flb_graphql_update_agent(struct flb_graphql_client *client,
     /* Config */
     if (config) {
         pack_kv(&mp_pck, "config", config);
+    }
+
+    /* Optional distro and package_type */
+    if (distro) {
+        pack_kv(&mp_pck, "distro", distro);
+    }
+    if (package_type) {
+        pack_kv(&mp_pck, "packageType", package_type);
     }
 
     /* Ensure Labels */
