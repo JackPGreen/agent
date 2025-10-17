@@ -21,7 +21,6 @@ on:
         description: Token to use to pull images from GitHub Container Registry.
         required: true
 jobs:
-
   get-meta:
     name: Get meta information required
     runs-on: ubuntu-latest
@@ -46,15 +45,13 @@ jobs:
         env:
           JSON_FILE_NAME: build-config.json
 
-  test-container-config:
-    name: Test config of ${{ inputs.image }}:${{ inputs.image-tag }}
+  test-bats-container:
+    name: Run BATS tests for ${{ inputs.image }}/test:${{ inputs.image-tag }}
     runs-on: ubuntu-latest
     env:
-      IMAGE: ${{ inputs.image }}
-      IMAGE_TAG: ${{ inputs.image-tag }}
+      FLUENTDO_AGENT_TAG: ${{ inputs.image-tag }}
     permissions:
       packages: read
-      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -70,9 +67,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.github-token }}
 
-      - name: Run config tests
-        run: ./testing/verify-config.sh
+      - name: Run all functional BATS tests
+        run: docker run --rm -t "${FLUENTDO_AGENT_IMAGE}:${FLUENTDO_AGENT_TAG}"
         shell: bash
+        env:
+          # Use the BATS functional test image here
+          FLUENTDO_AGENT_IMAGE: ${{ inputs.image }}/test
+
+      - name: Install BATS
+        uses: bats-core/bats-action@3.0.1
+        with:
+          assert-install: false
+          detik-install: false
+          file-install: false
+          support-install: false
+
+      - name: Install Rush for parallelism
+        run: curl -sSfL https://github.com/shenwei356/rush/releases/download/v0.7.0/rush_linux_amd64.tar.gz | sudo tar xzf - -C /usr/local/bin
+        shell: bash
+
+      - name: Run container integration tests
+        run: ./testing/bats/run-container-integration-tests.sh
+        shell: bash
+        env:
+          # We use the actual image here for testing against
+          FLUENTDO_AGENT_IMAGE: ${{ inputs.image }}
+          # allow for some parallelity without GNU parallel, since it is not installed by default
+          BATS_NO_PARALLELIZE_ACROSS_FILES: 1
+          BATS_NUMBER_OF_PARALLEL_JOBS: 4
+          BATS_PARALLEL_BINARY_NAME: rush
 
   test-verify-signatures:
     name: Verify image signatures for ${{ inputs.image }}:${{ inputs.image-tag }}
@@ -182,9 +205,9 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - test-kubernetes
-      - test-container-config
       - test-redhat-certification
       - test-verify-signatures
+      - test-bats-container
     steps:
       - name: Decide whether the needed jobs succeeded or failed
         uses: re-actors/alls-green@release/v1

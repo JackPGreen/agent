@@ -29,10 +29,8 @@ jobs:
     name: Test K8S version ${{ inputs.kind-version }} with ${{ inputs.image }}:${{ inputs.image-tag }}
     runs-on: ubuntu-latest
     env:
-      NAMESPACE: fluent-agent-test
-      IMAGE: ${{ inputs.image }}
-      IMAGE_TAG: ${{ inputs.image-tag }}
-      KIND_CLUSTER_NAME: test-cluster-${{ inputs.kind-version }}-${{ github.run_id }}
+      FLUENTDO_AGENT_IMAGE: ${{ inputs.image }}
+      FLUENTDO_AGENT_TAG: ${{ inputs.image-tag }}
       KIND_VERSION: ${{ inputs.kind-version }}
     steps:
       - name: Checkout code
@@ -49,10 +47,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.github-token }}
 
-      - name: Run config tests
-        run: ./testing/verify-config.sh
-        shell: bash
-
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
@@ -63,11 +57,30 @@ jobs:
         uses: helm/kind-action@v1
         with:
           install_only: true
+          # To fix an issue with loading multi-arch images
+          # https://github.com/kubernetes-sigs/kind/issues/3795
           version: v0.30.0
 
-      - name: Run test
-        run: ./testing/run-k8s-tests.sh
+      - name: Install BATS
+        uses: bats-core/bats-action@3.0.1
+        with:
+          assert-install: false
+          detik-install: false
+          file-install: false
+          support-install: false
+
+      - name: Install Rush for parallelism
+        run: curl -sSfL https://github.com/shenwei356/rush/releases/download/v0.7.0/rush_linux_amd64.tar.gz | sudo tar xzf - -C /usr/local/bin
         shell: bash
+
+      - name: Run integration tests
+        run: ./testing/bats/run-k8s-integration-tests.sh
+        shell: bash
+        env:
+          # allow for some parallelity without GNU parallel, since it is not installed by default
+          BATS_NO_PARALLELIZE_ACROSS_FILES: 1
+          BATS_NUMBER_OF_PARALLEL_JOBS: 4
+          BATS_PARALLEL_BINARY_NAME: rush
 
       # Debugging steps to run if something goes wrong
       - name: Debug - List all pods
@@ -77,15 +90,5 @@ jobs:
 
       - name: Debug - Describe pods
         if: always()
-        run: kubectl describe pods -n "$NAMESPACE"
-        shell: bash
-
-      - name: Debug - Get logs from pods
-        if: always()
-        run: |
-          for pod in $(kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
-            echo "Logs from pod: $pod"
-            kubectl logs $pod -n "$NAMESPACE" || echo "No logs available for pod: $pod"
-            echo "-----------------------------------"
-          done
+        run: kubectl describe pods -A
         shell: bash
