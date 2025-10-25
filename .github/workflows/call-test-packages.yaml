@@ -2,6 +2,10 @@ name: Reusable workflow to test packages
 on:
   workflow_call:
     inputs:
+      build-matrix:
+        description: The JSON matrix of build targets, this will be processed and converted to test targets.
+        required: true
+        type: string
       version:
         description: The version we are building for (as a numeric value 1.2.3).
         required: true
@@ -31,36 +35,71 @@ on:
 env:
   FLUENTDO_AGENT_VERSION: ${{ inputs.version }}
 jobs:
-  # TODO: future work to support matrix job
-  # call-test-packages-get-meta:
-  #   name: Get metadata for testing packages
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: read
-  #   outputs:
-  #     linux-test-targets: ${{ steps.set-meta.outputs.linux-test-targets }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v5
-  #       with:
-  #         repository: FluentDo/agent
-  #         ref: ${{ inputs.ref }}
+  # This job converts the JSON build-matrix coming in to a matrix of test jobs.
+  # We convert using the following rules:
+  # 1. Drop any arm64v8 targets - we only test AMD64 packages for now.
+  # 2. Convert the distro value from something like 'centos/8' to 'dokken/centos-8'
+  # Finally we output another JSON matrix to use for call-test-packages-functional.
+  call-test-packages-get-meta:
+    name: Get metadata for testing
+    runs-on: ubuntu-latest
+    outputs:
+      linux-test-targets: ${{ steps.get_matrix.outputs.linux_test_targets }}
+    steps:
+      - name: Log in to Dockerhub
+        if: ${{ !env.ACT }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ inputs.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
 
-  #     - name: Extract the configuration from the JSON file
-  #       # Read from the file and remove newline characters: https://stackoverflow.com/a/64627966
-  #       id: set-meta
-  #       run: |
-  #         LINUX_TEST_TARGETS=$(cat "$JSON_FILE_NAME"|jq -c .linux_test_targets )
-  #         echo "linux-test-targets=$LINUX_TEST_TARGETS"
-  #         echo "linux-test-targets=$LINUX_TEST_TARGETS" >> $GITHUB_OUTPUT
-  #       shell: bash
-  #       env:
-  #         JSON_FILE_NAME: build-config.json
+      - name: Create matrix from input matrix and verify pullable images
+        id: get_matrix
+        run: |
+          set -euo pipefail
+          json='${{ inputs.build-matrix }}'
+          echo "Input JSON: $json"
+
+          # Build initial candidates: drop arm64 entries, unsupported CentOS versions and map distro -> image
+          echo "$json" | jq -c '[.[] | select(endswith(".arm64v8") | not) | select(. != "centos/7" and . != "centos/8") | {distro: ., image: ("dokken/" + (gsub("/"; "-")))}]' > /tmp/candidates.json
+          echo "Candidates:"
+          jq -r '.[] | "\(.distro) -> \(.image)"' /tmp/candidates.json || true
+
+          # Test docker pull for each candidate, keep only successful pulls
+          valid_json_items=()
+          while read -r item; do
+            distro=$(echo "$item" | jq -r '.distro')
+            image=$(echo "$item" | jq -r '.image')
+            echo "Testing docker pull for: $image (distro: $distro)"
+            if docker pull "$image" >/tmp/pull.out 2>&1; then
+              echo "OK: $image"
+              valid_json_items+=("$item")
+            else
+              echo "SKIP (cannot pull): $image"
+              echo "docker pull output:"
+              sed -n '1,200p' /tmp/pull.out || true
+            fi
+          done < <(jq -c '.[]' /tmp/candidates.json)
+
+          # Compose final JSON array
+          if [ "${#valid_json_items[@]}" -eq 0 ]; then
+            final='[]'
+          else
+            printf '%s\n' "${valid_json_items[@]}" | jq -s '.' > /tmp/final.json
+            final="$(jq -c . /tmp/final.json)"
+          fi
+
+          echo "Final matrix: $final"
+          echo '-------'
+          echo "$final" | jq .
+          # Emit the JSON array as a step output
+          echo "linux_test_targets=$final" >> "$GITHUB_OUTPUT"
+        shell: bash
 
   call-test-packages-functional:
-    name: functional tests - ${{ matrix.test.distro }} package test
-    # needs:
-    #   - call-test-packages-get-meta
+    name: functional tests - ${{ matrix.config.distro }} package test
+    needs:
+      - call-test-packages-get-meta
     # We only run tests on AMD runners here
     runs-on: ${{ inputs.amd-runner-label }}
     timeout-minutes: 30
@@ -68,20 +107,11 @@ jobs:
       contents: read
       packages: read
     env:
-      FLUENT_BIT_BINARY: /opt/fluentdo-agent/bin/fluent-bit
+      FLUENT_BIT_BINARY: /opt/fluent-bit/bin/fluent-bit
     strategy:
+      fail-fast: false
       matrix:
-        test:
-          - image: dokken/almalinux-8
-            distro: almalinux/8
-          - image: dokken/ubuntu-24.04
-            distro: ubuntu/24.04
-        # Add tests for other distros
-        include:
-          - image: dokken/almalinux-8
-            distro: centos/8
-          - image: dokken/almalinux-8
-            distro: rockylinux/8
+        config: ${{ fromJson(needs.call-test-packages-get-meta.outputs.linux-test-targets) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -90,6 +120,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Log in to Dockerhub
+        if: ${{ !env.ACT }}
         uses: docker/login-action@v3
         with:
           username: ${{ inputs.dockerhub-username }}
@@ -108,9 +139,10 @@ jobs:
         uses: ./.github/actions/get-package-name
         id: get_package_name
         with:
-          distro: "${{ matrix.test.distro }}"
+          distro: "${{ matrix.config.distro }}"
 
       - name: Download package
+        if: ${{ !env.ACT }}
         uses: actions/download-artifact@v5
         with:
           name: ${{ steps.get_package_name.outputs.package-name }}
@@ -128,10 +160,10 @@ jobs:
           platforms: linux/amd64
           target: test
           build-args: |
-            BASE_BUILDER=${{ matrix.test.image }}
+            BASE_BUILDER=${{ matrix.config.image }}
           provenance: false
           load: true
-          tags: bats/test/${{ matrix.test.distro }}
+          tags: bats/test/${{ matrix.config.distro }}
 
       - name: Run functional tests against local container
         run: |
@@ -139,7 +171,85 @@ jobs:
             -v $PWD/downloads:/downloads:ro \
             -e FLUENT_BIT_BINARY="$FLUENT_BIT_BINARY" \
             -e FLUENTDO_AGENT_VERSION="$FLUENTDO_AGENT_VERSION" \
-            bats/test/${{ matrix.test.distro }}
+            bats/test/${{ matrix.config.distro }}
         shell: bash
 
-# TODO: provide testing on target VMs or similar
+  # Test packages installed on the actual target OS
+  # For now we just use the ephemeral runners
+  # TODO: provide testing on target VMs or similar
+  call-test-packages-integration:
+    name: integration tests - ${{ matrix.name }} package test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            package-type: deb
+            package: package-ubuntu-24.04
+            name: ubuntu
+            binary: /opt/fluent-bit/bin/fluent-bit
+          # - runner: windows-latest
+          #   package-type: msi
+          #   package: package-windows
+          #   name: windows MSI
+          #   binary: C:\fluent-bit\bin\fluent-bit
+    env:
+      FLUENT_BIT_BINARY: ${{ matrix.binary }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          repository: FluentDo/agent
+          ref: ${{ inputs.ref }}
+
+      # Must be removed on Namespace runners
+      - name: Set up QEMU
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: ${{ !contains( runner.name, 'nsc-' ) }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install BATS
+        uses: bats-core/bats-action@3.0.1
+        with:
+          assert-install: false
+          detik-install: false
+          file-install: false
+          support-install: false
+
+      - name: Download package
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ matrix.package }}
+          path: downloads/
+
+      - name: Debug
+        run: ls -lRh downloads/
+        shell: bash
+
+      - name: Install package
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          find "downloads/" -name 'fluentdo-agent_*_amd64.deb' -exec sudo apt-get install -y {} \;
+          ls -lRh /opt/
+        shell: bash
+
+      - name: Install package
+        if: runner.os == 'Windows'
+        run: |
+          $msi = Get-ChildItem -Path ".\downloads" -Filter "*.msi" | Select-Object -First 1
+          msiexec.exe /i "$($msi.FullName)" /quiet /qn
+        shell: pwsh
+
+      # We run both all tests for packages, not containers or K8S
+      - name: Run all tests
+        run: ./testing/bats/run-bats.sh --filter-tags '!container,!k8s' --recursive "$PWD/testing/bats/tests"
+        shell: bash
