@@ -15,10 +15,24 @@ SCRIPT_DIR=$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )
 
 export FLUENT_BIT_BINARY=${FLUENT_BIT_BINARY:-/fluent-bit/bin/fluent-bit}
 export FLUENTDO_AGENT_VERSION=${FLUENTDO_AGENT_VERSION:-25.10.4}
+export FLUENTDO_AGENT_URL="${FLUENTDO_AGENT_URL:-https://staging.fluent.do}"
 
 # Optional variables for container/k8s tests
 # FLUENTDO_AGENT_IMAGE=...
 # FLUENTDO_AGENT_TAG=...
+
+# Attempt to auto-parallelise when available
+if command -v rush &>/dev/null; then
+	echo "Using rush for parallelism"
+	export BATS_NO_PARALLELIZE_ACROSS_FILES=${BATS_NO_PARALLELIZE_ACROSS_FILES:-1}
+	export BATS_NUMBER_OF_PARALLEL_JOBS=${BATS_NUMBER_OF_PARALLEL_JOBS:-4}
+	export BATS_PARALLEL_BINARY_NAME=${BATS_PARALLEL_BINARY_NAME:-rush}
+elif command -v parallel &>/dev/null; then
+	echo "Using parallel for parallelism"
+	export BATS_NO_PARALLELIZE_ACROSS_FILES=${BATS_NO_PARALLELIZE_ACROSS_FILES:-1}
+	export BATS_NUMBER_OF_PARALLEL_JOBS=${BATS_NUMBER_OF_PARALLEL_JOBS:-4}
+	export BATS_PARALLEL_BINARY_NAME=${BATS_PARALLEL_BINARY_NAME:-parallel}
+fi
 
 # Test configuration and control
 export CONTAINER_RUNTIME=${CONTAINER_RUNTIME:-docker}
@@ -43,7 +57,6 @@ if ! command -v bats &> /dev/null ; then
 	exit 1
 fi
 
-# Run BATS tests
 if [ -n "${BATS_DEBUG:-}" ] && [ "${BATS_DEBUG}" != "0" ]; then
 	set -x
 fi
