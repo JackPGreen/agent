@@ -454,28 +454,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Fetch all history including tags
 
       - name: Get version info
         id: get-version
         run: |
-          # Create a tag name based on the current date
-          # Format: vYY.M.W
-          YEAR=$(date +%y)
-          MONTH=$(date +%-m)
-          WEEK=$((($(date +%-d)-1)/7+1))
+          # Fetch tags and all branches to ensure we can analyze the history
+          git fetch --tags
+          git fetch --all
 
-          NEXT_WEEK=$((WEEK + 1))
-          # Ignore 5 week months
-          if [ $NEXT_WEEK -gt 4 ]; then
-            NEXT_WEEK=1
-            MONTH=$((MONTH + 1))
-            if [ $MONTH -gt 12 ]; then
-            MONTH=1
-            YEAR=$((YEAR + 1))
-            fi
-          fi
-          echo "next_tag=v${YEAR}.${MONTH}.${NEXT_WEEK}"
-          echo "next_tag=v${YEAR}.${MONTH}.${NEXT_WEEK}" >> $GITHUB_OUTPUT
+          ./scripts/get-next-tag.sh \
+            --event-name "${{ github.event_name }}" \
+            --ref-type "${{ github.ref_type }}" \
+            --ref-name "${{ github.ref_name }}" \
+            --base-ref "${{ github.base_ref }}" \
+            --default-branch "${{ github.event.repository.default_branch }}"
         shell: bash
 
       - name: Update version to next week
@@ -517,7 +511,6 @@ jobs:
         with:
           commit-message: "ci: update to new version ${{ steps.get-version.outputs.next_tag }}"
           signoff: true
-          base: main
           branch: ci_update-version-${{ steps.get-version.outputs.next_tag }}
           delete-branch: true
           title: "ci: update version"
