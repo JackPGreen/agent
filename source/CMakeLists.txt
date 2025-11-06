@@ -1573,3 +1573,19 @@ if(FLB_CPACK_SYSVINIT)
 endif(FLB_CPACK_SYSVINIT)
 
 include(CPack)
+
+# Show install destinations
+message(STATUS "=== CPack Debug Info ===")
+message(STATUS "CPACK_PACKAGE_NAME: ${CPACK_PACKAGE_NAME}")
+message(STATUS "CPACK_PACKAGE_VERSION: ${CPACK_PACKAGE_VERSION}")
+message(STATUS "CPACK_INSTALL_PREFIX: ${CPACK_INSTALL_PREFIX}")
+message(STATUS "CPACK_PACKAGE_FILE_NAME: ${CPACK_PACKAGE_FILE_NAME}")
+message(STATUS "CPACK_GENERATOR: ${CPACK_GENERATOR}")
+message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "Binaries install to: ${CMAKE_INSTALL_BINDIR}")
+message(STATUS "Libraries install to: ${CMAKE_INSTALL_LIBDIR}")
+
+# Show what files will be packaged
+file(GLOB_RECURSE INSTALL_FILES "${CMAKE_INSTALL_PREFIX}/*")
+message(STATUS "Files to package: ${INSTALL_FILES}")
+
