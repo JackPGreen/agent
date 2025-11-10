@@ -12,7 +12,15 @@
 
 ## What is [FluentDo](https://fluent.do) Agent?
 
-[FluentDo](https://fluent.do) Agent is a **stable, secure by default, OSS (Apache-licensed) downstream distribution of Fluent Bit** with predictable releases and long-term supported versions for 24 months.
+[FluentDo](https://fluent.do) Agent is a **hardened, stable, secure by default, OSS (Apache-licensed) downstream distribution of Fluent Bit** with predictable releases and long-term supported versions for 24 months.
+
+It also has built-in functionality for:
+
+1. Native de-duplication (Reduce log volume)
+2. Native log sampling (Reduce log volume)
+3. AI processors for routing (Smart log routing)
+4. Enhanced storage layer (Efficient buffering)
+
 
 ## Support & Lifecycle
 
