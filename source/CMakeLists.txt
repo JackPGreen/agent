@@ -134,7 +134,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/library")
 option(FLB_ALL                 "Enable all features"                         No)
 option(FLB_DEBUG               "Build with debug mode (-g)"                  No)
 option(FLB_RELEASE             "Build with release mode (-O2 -g -DNDEBUG)"   Yes)
-set(FLB_IPO "On" CACHE STRING "Build with interprocedural optimization")
+set(FLB_IPO "ReleaseOnly" CACHE STRING "Build with interprocedular optimization")
 set_property(CACHE FLB_IPO PROPERTY STRINGS "On;Off;ReleaseOnly")
 option(FLB_SMALL               "Optimise for small size"       No)
 set(FLB_SECURITY "ReleaseOnly" CACHE STRING "Build with security optimizations")
@@ -1591,10 +1591,6 @@ message(STATUS "CPACK_GENERATOR: ${CPACK_GENERATOR}")
 message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Binaries install to: ${CMAKE_INSTALL_BINDIR}")
 message(STATUS "Libraries install to: ${CMAKE_INSTALL_LIBDIR}")
-
-# Show what files will be packaged
-file(GLOB_RECURSE INSTALL_FILES "${CMAKE_INSTALL_PREFIX}/*")
-message(STATUS "Files to package: ${INSTALL_FILES}")
 
 # Verify all required options are set
 validate_required_options(FLB_HAVE_LIBYAML)
