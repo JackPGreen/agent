@@ -145,8 +145,8 @@ struct flb_service_config service_configs[] = {
     {FLB_CONF_STORAGE_BL_MEM_LIMIT,
      FLB_CONF_TYPE_STR,
      offsetof(struct flb_config, storage_bl_mem_limit)},
-    {FLB_CONF_STORAGE_BL_FLUSH_ON_SHUTDOWN,                  
-     FLB_CONF_TYPE_BOOL,                                       
+    {FLB_CONF_STORAGE_BL_FLUSH_ON_SHUTDOWN,
+     FLB_CONF_TYPE_BOOL,
      offsetof(struct flb_config, storage_bl_flush_on_shutdown)},
     {FLB_CONF_STORAGE_MAX_CHUNKS_UP,
      FLB_CONF_TYPE_INT,
@@ -169,6 +169,10 @@ struct flb_service_config service_configs[] = {
      FLB_CONF_TYPE_INT,
      offsetof(struct flb_config, coro_stack_size)},
 
+    {FLB_CONF_STR_MULTILINE_BUFFER_LIMIT,
+     FLB_CONF_TYPE_STR,
+     offsetof(struct flb_config, multiline_buffer_limit)},
+
     /* Scheduler */
     {FLB_CONF_STR_SCHED_CAP,
      FLB_CONF_TYPE_INT,
@@ -176,6 +180,11 @@ struct flb_service_config service_configs[] = {
     {FLB_CONF_STR_SCHED_BASE,
      FLB_CONF_TYPE_INT,
      offsetof(struct flb_config, sched_base)},
+
+    /* Escape UNicode inside of JSON */
+    {FLB_CONF_UNICODE_STR_JSON_ESCAPE,
+     FLB_CONF_TYPE_BOOL,
+     offsetof(struct flb_config, json_escape_unicode)},
 
 #ifdef FLB_HAVE_STREAM_PROCESSOR
     {FLB_CONF_STR_STREAMS_FILE,
@@ -300,6 +309,7 @@ struct flb_config *flb_config_init()
     config->storage_bl_flush_on_shutdown = FLB_FALSE;
     config->sched_cap  = FLB_SCHED_CAP;
     config->sched_base = FLB_SCHED_BASE;
+    config->json_escape_unicode = FLB_TRUE;
 
     /* reload */
     config->ensure_thread_safety_on_hot_reloading = FLB_TRUE;
@@ -362,6 +372,12 @@ struct flb_config *flb_config_init()
      * on we use flb_config_exit to cleanup the config, which requires
      * the config->multiline_parsers list to be initialized. */
     mk_list_init(&config->multiline_parsers);
+    config->multiline_buffer_limit = flb_strdup(FLB_ML_BUFFER_LIMIT_DEFAULT_STR);
+    if (config->multiline_buffer_limit == NULL) {
+        flb_errno();
+        flb_config_exit(config);
+        return NULL;
+    }
 
     /* Task map */
     ret = flb_config_task_map_resize(config, FLB_CONFIG_DEFAULT_TASK_MAP_SIZE);
@@ -466,6 +482,12 @@ void flb_config_exit(struct flb_config *config)
         if (config->ch_notif[0] != config->ch_notif[1]) {
             mk_event_closesocket(config->ch_notif[1]);
         }
+    }
+
+    /* free heap-owned multiline_buffer_limit if set */
+    if (config->multiline_buffer_limit) {
+        flb_free(config->multiline_buffer_limit);
+        config->multiline_buffer_limit = NULL;
     }
 
     if (config->env) {

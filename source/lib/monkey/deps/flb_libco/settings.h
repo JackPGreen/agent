@@ -12,6 +12,14 @@
 #define LIBCO_MPROTECT
 #endif
 
+/*
+ * macOS with LTO/IPO causes LLVM to mangle co_swap_function symbol.
+ * Use LIBCO_MPROTECT to avoid text_section attribute.
+ */
+#ifdef __APPLE__
+#define LIBCO_MPROTECT
+#endif
+
 /*[amd64]:
    Win64 only: provides a substantial speed-up, but will thrash XMM regs
    do not use this unless you are certain your application won't use SSE */

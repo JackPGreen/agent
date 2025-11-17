@@ -322,7 +322,6 @@ void test_format_partially_suceeded_records()
     flb_destroy(ctx);
 }
 
-
 TEST_LIST = {
     { "format_no_log_key",           test_format_no_log_key },
     { "format_with_log_key_found",   test_format_with_log_key_found },

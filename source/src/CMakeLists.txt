@@ -16,6 +16,7 @@ set(src
   flb_hash_table.c
   flb_help.c
   flb_pack.c
+  flb_pack_json.c
   flb_pack_gelf.c
   flb_sds.c
   flb_sds_list.c
@@ -92,6 +93,7 @@ set(src
   flb_cfl_record_accessor.c
   flb_conditionals.c
   flb_mem.c
+  flb_blob_db.c
   )
 
 # Git support (optional)
@@ -398,6 +400,7 @@ set(FLB_DEPS
   ctraces-static
   mk_core
   jsmn
+  yyjson
   ${MSGPACK_LIBRARIES}
   mpack-static
   chunkio-static

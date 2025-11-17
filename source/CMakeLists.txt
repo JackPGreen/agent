@@ -134,7 +134,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/library")
 option(FLB_ALL                 "Enable all features"                         No)
 option(FLB_DEBUG               "Build with debug mode (-g)"                  No)
 option(FLB_RELEASE             "Build with release mode (-O2 -g -DNDEBUG)"   Yes)
-set(FLB_IPO "On" CACHE STRING "Build with interprocedural optimization")
+set(FLB_IPO "ReleaseOnly" CACHE STRING "Build with interprocedular optimization")
 set_property(CACHE FLB_IPO PROPERTY STRINGS "On;Off;ReleaseOnly")
 option(FLB_SMALL               "Optimise for small size"       No)
 set(FLB_SECURITY "ReleaseOnly" CACHE STRING "Build with security optimizations")
@@ -429,6 +429,14 @@ if(FLB_UNICODE_ENCODER)
   endif()
 endif()
 
+# simdutf
+if(FLB_UNICODE_ENCODER)
+  if (NOT FLB_USE_SIMDUTF)
+    message(STATUS "FLB_USE_SIMDUTF is disabled. Disabling FLB_UNICODE_ENCODER support.")
+    set(FLB_UNICODE_ENCODER OFF)
+  endif()
+endif()
+
 if(FLB_COVERAGE)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 --coverage -fprofile-arcs -ftest-coverage")
   if (FLB_UNICODE_ENCODER)
@@ -469,7 +477,7 @@ if(FLB_SECURITY STREQUAL "On" OR (FLB_SECURITY STREQUAL "ReleaseOnly" AND FLB_RE
       set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fstack-protector-strong --param ssp-buffer-size=4")
       # Fortify requires optimization
       if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_FORTIFY_SOURCE=2 -ftrapv")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -ftrapv")
       endif()
       # Security hardening linker flags
       if(CMAKE_SYSTEM_NAME MATCHES "Linux")
@@ -580,6 +588,9 @@ endif()
 
 # ring buffer library
 add_subdirectory(${FLB_PATH_LIB_RING_BUFFER} EXCLUDE_FROM_ALL)
+
+# yyjson
+add_subdirectory(${FLB_PATH_LIB_YYJSON} EXCLUDE_FROM_ALL)
 
 # Avro
 if(FLB_AVRO_ENCODER)
@@ -1228,6 +1239,14 @@ else()
   set(FLB_ARROW OFF)
 endif()
 
+# Additional prerequisites for Apache Parquet
+pkg_check_modules(ARROW_GLIB_PARQUET QUIET parquet-glib)
+if(FLB_ARROW AND ARROW_GLIB_PARQUET_FOUND)
+  FLB_DEFINITION(FLB_HAVE_ARROW_PARQUET)
+else()
+  message(STATUS "Arrow GLib Parquet not found. Disabling parquet compression")
+endif()
+
 # EBPF Support
 # ============
 if (FLB_IN_EBPF)
@@ -1572,10 +1591,6 @@ message(STATUS "CPACK_GENERATOR: ${CPACK_GENERATOR}")
 message(STATUS "CMAKE_INSTALL_PREFIX: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Binaries install to: ${CMAKE_INSTALL_BINDIR}")
 message(STATUS "Libraries install to: ${CMAKE_INSTALL_LIBDIR}")
-
-# Show what files will be packaged
-file(GLOB_RECURSE INSTALL_FILES "${CMAKE_INSTALL_PREFIX}/*")
-message(STATUS "Files to package: ${INSTALL_FILES}")
 
 # Verify all required options are set
 validate_required_options(FLB_HAVE_LIBYAML)

@@ -145,6 +145,7 @@ struct flb_config {
 
     /* Multiline core parser definitions */
     struct mk_list multiline_parsers;
+    char *multiline_buffer_limit; /* limit for multiline concatenated data */
 
     /* Outputs instances */
     struct mk_list outputs;             /* list of output plugins   */
@@ -321,6 +322,8 @@ struct flb_config {
     struct flb_task_map *task_map;
     size_t task_map_size;
 
+    int json_escape_unicode;
+
     int dry_run;
 };
 
@@ -412,8 +415,14 @@ enum conf_type {
 /* Coroutines */
 #define FLB_CONF_STR_CORO_STACK_SIZE "Coro_Stack_Size"
 
+/* Multiline */
+#define FLB_CONF_STR_MULTILINE_BUFFER_LIMIT "multiline_buffer_limit"
+
 /* Scheduler */
 #define FLB_CONF_STR_SCHED_CAP        "scheduler.cap"
 #define FLB_CONF_STR_SCHED_BASE       "scheduler.base"
+
+/* json escape */
+#define FLB_CONF_UNICODE_STR_JSON_ESCAPE "json.escape_unicode"
 
 #endif

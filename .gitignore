@@ -4,3 +4,5 @@ gha-creds*.json
 .vagrant/
 .aider*
 downloads/
+upstream/
+# Trigger rebuild

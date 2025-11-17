@@ -304,8 +304,8 @@ struct flb_record_dedup_context *flb_record_dedup_context_create(const char *pat
     rocksdb_options_set_max_write_buffer_number(ctx->options, 3);
     rocksdb_options_set_target_file_size_base(ctx->options, 64 * 1024 * 1024);
 
-    /* Enable ZSTD compression for better storage efficiency */
-    rocksdb_options_set_compression(ctx->options, rocksdb_zstd_compression);
+    /* Disable compression to reduce dependencies */
+    rocksdb_options_set_compression(ctx->options, rocksdb_no_compression);
 
     /* Optimize for point lookups */
     rocksdb_options_optimize_for_point_lookup(ctx->options, ctx->opts.cache_size / (1024 * 1024));
@@ -320,6 +320,7 @@ struct flb_record_dedup_context *flb_record_dedup_context_create(const char *pat
         flb_error("[dedup] failed to open database: %s", err);
         free(err);
 
+        rocksdb_block_based_options_destroy(ctx->table_options);
         rocksdb_cache_destroy(ctx->cache);
         rocksdb_options_destroy(ctx->options);
         rocksdb_readoptions_destroy(ctx->read_options);
@@ -354,6 +355,10 @@ void flb_record_dedup_destroy(struct flb_record_dedup_context *ctx)
             flb_error("[dedup] failed to destroy database: %s", err);
             free(err);
         }
+    }
+
+    if (ctx->table_options) {
+        rocksdb_block_based_options_destroy(ctx->table_options);
     }
 
     if (ctx->cache) {
