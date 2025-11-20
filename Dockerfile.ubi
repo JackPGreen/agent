@@ -1,4 +1,4 @@
-FROM registry.access.redhat.com/ubi9:9.5 AS base-builder
+FROM registry.access.redhat.com/ubi10:10.1 AS base-builder
 
 # hadolint ignore=DL3041
 RUN dnf update -y && \
@@ -26,7 +26,7 @@ WORKDIR /tmp
 RUN curl -LO https://www.libssh2.org/download/libssh2-${LIBSSH2_VER}.tar.gz && \
     tar xf libssh2-${LIBSSH2_VER}.tar.gz
 WORKDIR /tmp/libssh2-${LIBSSH2_VER}
-RUN ./configure --with-openssl --prefix=/usr/local && \
+RUN ./configure --with-openssl --prefix=/usr/local --disable-examples-build && \
     make -j "$(getconf _NPROCESSORS_ONLN)" && make install && \
     ldconfig
 
@@ -35,8 +35,12 @@ ARG LIBGIT2_VER=1.9.1
 WORKDIR /tmp
 RUN git clone --branch v${LIBGIT2_VER} --depth 1 https://github.com/libgit2/libgit2.git
 WORKDIR /tmp/libgit2
-RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-          -DUSE_SSH=ON -DBUILD_TESTS=OFF -DBUILD_CLI=OFF && \
+RUN cmake -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=ON \
+        -DUSE_SSH=ON \
+        -DBUILD_TESTS=OFF \
+        -DBUILD_CLI=OFF && \
     cmake --build build --target install -- -j "$(getconf _NPROCESSORS_ONLN)" && \
     echo "/usr/local/lib64" > /etc/ld.so.conf.d/libgit2.conf && \
     ldconfig
@@ -104,10 +108,10 @@ RUN [ -n "$MAKE_EXTRA_ARGS" ] && make ${MAKE_EXTRA_ARGS} || make -j "$(getconf _
     install bin/fluent-bit /fluent-bit/bin/fluent-bit
 
 # The release image now
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS production
+FROM registry.access.redhat.com/ubi10/ubi-minimal:10.1 AS production
 
 # hadolint ignore=DL3041
-RUN microdnf update -y && microdnf install -y openssl libyaml && microdnf clean all
+RUN microdnf update -y && microdnf install -y openssl libyaml cyrus-sasl && microdnf clean all
 
 EXPOSE 2020
 
