@@ -83,6 +83,14 @@ if (MSVC)
   add_compile_options(/MT)
 else()
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall")
+  if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Prevent the toolchain from emitting an executable stack on Linux targets,
+    # which triggers kernel warnings (e.g. "started with executable stack") and
+    # weakens security hardening. The linker flag is not supported on macOS.
+    add_compile_options(-Wa,--noexecstack)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,noexecstack")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,noexecstack")
+  endif()
   # The following flags are to enhance security, but it may impact performance,
   # we disable them by default.
 endif()
@@ -134,12 +142,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/library")
 option(FLB_ALL                 "Enable all features"                         No)
 option(FLB_DEBUG               "Build with debug mode (-g)"                  No)
 option(FLB_RELEASE             "Build with release mode (-O2 -g -DNDEBUG)"   Yes)
-set(FLB_IPO "ReleaseOnly" CACHE STRING "Build with interprocedular optimization")
+set(FLB_IPO "ReleaseOnly" CACHE STRING "Build with interprocedural optimization")
 set_property(CACHE FLB_IPO PROPERTY STRINGS "On;Off;ReleaseOnly")
 option(FLB_SMALL               "Optimise for small size"       No)
 set(FLB_SECURITY "ReleaseOnly" CACHE STRING "Build with security optimizations")
 set_property(CACHE FLB_SECURITY PROPERTY STRINGS "On;Off;ReleaseOnly")
 option(FLB_COVERAGE            "Build with code-coverage"      No)
+option(FLB_COMPILER_STRICT_POINTER_TYPES "Build with -Werror=incompatible-pointer-types" No)
 option(FLB_JEMALLOC            "Build with Jemalloc support"   No)
 option(FLB_REGEX               "Build with Regex support"     Yes)
 option(FLB_UTF8_ENCODER        "Build with UTF8 encoding support" Yes)
@@ -429,20 +438,23 @@ if(FLB_UNICODE_ENCODER)
   endif()
 endif()
 
-# simdutf
-if(FLB_UNICODE_ENCODER)
-  if (NOT FLB_USE_SIMDUTF)
-    message(STATUS "FLB_USE_SIMDUTF is disabled. Disabling FLB_UNICODE_ENCODER support.")
-    set(FLB_UNICODE_ENCODER OFF)
-  endif()
-endif()
-
 if(FLB_COVERAGE)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0 --coverage -fprofile-arcs -ftest-coverage")
   if (FLB_UNICODE_ENCODER)
     set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -g -O0 --coverage -fprofile-arcs -ftest-coverage")
   endif()
   set(CMAKE_BUILD_TYPE "Debug")
+endif()
+
+if(FLB_COMPILER_STRICT_POINTER_TYPES)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    add_compile_options(-Werror=incompatible-pointer-types)
+  endif()
+  # Currently, AppleClang has more struct rules when using -Werror=incompatible-pointer-types.
+  # We still permit to discarding const qualifiers warnings.
+  if(CMAKE_C_COMPILER_ID MATCHES "AppleClang")
+    add_compile_options(-Wno-incompatible-pointer-types-discards-qualifiers)
+  endif()
 endif()
 
 # Enable Debug symbols if specified
@@ -576,14 +588,52 @@ add_subdirectory(${FLB_PATH_LIB_MINIZ} EXCLUDE_FROM_ALL)
 
 # Zstd (zstd)
 if(FLB_PREFER_SYSTEM_LIB_ZSTD)
-  find_package(PkgConfig)
-  pkg_check_modules(LIBZSTD libzstd>=1.4.8)
+  find_package(ZSTD 1.4.8 QUIET)
+  if(ZSTD_FOUND)
+    set(LIBZSTD_FOUND TRUE)
+    # Use the target provided by find_package(ZSTD)
+    # Modern FindZSTD provides ZSTD::libzstd_static or ZSTD::libzstd_shared
+    if(TARGET ZSTD::libzstd_static)
+      set(LIBZSTD_LIBRARIES ZSTD::libzstd_static)
+    elseif(TARGET ZSTD::libzstd_shared)
+      set(LIBZSTD_LIBRARIES ZSTD::libzstd_shared)
+    elseif(TARGET ZSTD::ZSTD)
+      set(LIBZSTD_LIBRARIES ZSTD::ZSTD)
+    else()
+      # Fallback: create a wrapper if no target is provided
+      add_library(BUNDLED::ZSTD INTERFACE IMPORTED)
+      if(ZSTD_LIBRARIES)
+        set_property(TARGET BUNDLED::ZSTD PROPERTY
+          INTERFACE_LINK_LIBRARIES "${ZSTD_LIBRARIES}")
+      endif()
+      if(ZSTD_INCLUDE_DIRS)
+        set_property(TARGET BUNDLED::ZSTD PROPERTY
+          INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INCLUDE_DIRS}")
+      endif()
+      set(LIBZSTD_LIBRARIES BUNDLED::ZSTD)
+    endif()
+   else()
+    find_package(PkgConfig)
+    pkg_check_modules(LIBZSTD libzstd>=1.4.8)
+    if(LIBZSTD_FOUND)
+      include_directories(${LIBZSTD_INCLUDE_DIRS})
+      link_directories(${LIBZSTD_LIBRARY_DIRS})
+      add_library(BUNDLED::ZSTD INTERFACE IMPORTED)
+      set_property(TARGET BUNDLED::ZSTD PROPERTY
+        INTERFACE_LINK_LIBRARIES "${LIBZSTD_LIBRARIES}")
+      set(LIBZSTD_LIBRARIES BUNDLED::ZSTD)
+    endif()
+  endif()
 endif()
-if(LIBZSTD_FOUND)
-  include_directories(${LIBZSTD_INCLUDE_DIRS})
-  link_directories(${LIBZSTD_LIBRARY_DIRS})
-else()
+
+if(NOT LIBZSTD_FOUND)
   include(cmake/zstd.cmake)
+
+  if(NOT MSVC)
+    target_compile_options(libzstd_static PRIVATE -fvisibility=hidden)
+  endif()
+
+  set(LIBZSTD_LIBRARIES libzstd_static)
 endif()
 
 # ring buffer library
@@ -597,8 +647,8 @@ if(FLB_AVRO_ENCODER)
   # jansson
   option(JANSSON_BUILD_DOCS         OFF)
   option(JANSSON_EXAMPLES           OFF)
-  option(JANSSON_WITHOUT_TESTS       ON)
   option(JANSSON_BUILD_SHARED_LIBS  OFF)
+  set(JANSSON_WITHOUT_TESTS ON CACHE BOOL "" FORCE)
   add_subdirectory(${FLB_PATH_LIB_JANSSON})
 
   #avro
@@ -770,6 +820,8 @@ endif()
 # AWS MSK IAM detection (must come after Kafka section)
 if(FLB_AWS AND FLB_KAFKA)
   # Check if Kafka SASL support was detected
+  # On Windows: uses SSPI (no Cyrus SASL needed, just SSL)
+  # On Linux/macOS: uses Cyrus SASL (libsasl2)
   if(DEFINED FLB_SASL_ENABLED AND FLB_SASL_ENABLED)
     set(FLB_HAVE_AWS_MSK_IAM ON)  # Set CMake variable
     FLB_DEFINITION(FLB_HAVE_AWS_MSK_IAM)  # Set preprocessor definition
