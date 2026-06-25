@@ -27,6 +27,10 @@
 
 #include <stdlib.h>
 
+/* Macro for stringifying build metadata */
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
 static inline flb_sds_t buf_append(flb_sds_t buf, const char *str, int len)
 {
     flb_sds_t tmp;
@@ -62,6 +66,66 @@ static int env_preset(struct flb_env *env)
         if (ret == 0) {
             flb_env_set(env, "HOSTNAME", tmp);
         }
+    }
+
+
+    /*
+     * ${OS_TYPE} this variable is useful to identify the operating system
+     * where the agent is running, if it is not set, we will try to detect
+     * it and set it as a default variable.
+     */
+    buf = getenv("OS_TYPE");
+    if (!buf) {
+#if defined(FLB_SYSTEM_WINDOWS)
+        flb_env_set(env, "OS_TYPE", "windows");
+#elif defined(FLB_SYSTEM_MACOS)
+        flb_env_set(env, "OS_TYPE", "macos");
+#elif defined(FLB_SYSTEM_LINUX)
+        flb_env_set(env, "OS_TYPE", "linux");
+#else
+        flb_env_set(env, "OS_TYPE", "unknown");
+#endif
+    }
+
+        /*
+         * ${AGENT_DISTRO} is a short runtime environment variable with distro metadata.
+         * If it is not set, we derive the value from build metadata.
+        * This is especially useful for Linux, where we have multiple distros and
+        * we want to be able to identify them.
+         */
+        buf = getenv("AGENT_DISTRO");
+    if (!buf) {
+#if defined(TELEMETRY_FORGE_AGENT_DISTRO)
+        flb_env_set(env, "AGENT_DISTRO", TOSTRING(TELEMETRY_FORGE_AGENT_DISTRO));
+#else
+        flb_env_set(env, "AGENT_DISTRO", "unknown");
+#endif
+    }
+
+    /*
+         * ${AGENT_PACKAGE_TYPE} is a short runtime environment variable with package metadata.
+         * If it is not set, we derive the value from build metadata.
+     */
+        buf = getenv("AGENT_PACKAGE_TYPE");
+    if (!buf) {
+#if defined(TELEMETRY_FORGE_AGENT_PACKAGE_TYPE)
+        flb_env_set(env, "AGENT_PACKAGE_TYPE", TOSTRING(TELEMETRY_FORGE_AGENT_PACKAGE_TYPE));
+#else
+        flb_env_set(env, "AGENT_PACKAGE_TYPE", "unknown");
+#endif
+    }
+
+    /*
+         * ${AGENT_VERSION} is a short runtime environment variable with version metadata.
+         * If it is not set, we derive the value from build metadata.
+     */
+        buf = getenv("AGENT_VERSION");
+    if (!buf) {
+#if defined(TELEMETRY_FORGE_AGENT_VERSION)
+        flb_env_set(env, "AGENT_VERSION", TOSTRING(TELEMETRY_FORGE_AGENT_VERSION));
+#else
+        flb_env_set(env, "AGENT_VERSION", "unknown");
+#endif
     }
 
     return 0;

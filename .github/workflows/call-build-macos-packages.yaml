@@ -98,6 +98,8 @@ jobs:
             -DOPENSSL_USE_STATIC_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DCPACK_GENERATOR=productbuild \
+            -DTELEMETRY_FORGE_AGENT_DISTRO=${{ matrix.config.runner }} \
+            -DTELEMETRY_FORGE_AGENT_PACKAGE_TYPE=PACKAGE \
             -DFLB_NIGHTLY_BUILD=${{ inputs.nightly-build-info }} ../
 
           cmake --build .
