@@ -1,0 +1,317 @@
+name: Release
+on:
+  push:
+    tags:
+      - v*
+env:
+  # Set once from repo variable or override here for testing
+  STEP_SECURITY_EGRESS_POLICY: ${{ vars.STEP_SECURITY_EGRESS_POLICY || 'audit' }}
+
+# Default to least permissions and then we can add as needed for each job.
+# This is a secure by default approach and also makes it easier to reason
+# about permissions for each job since they are not implicit from the workflow
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  get-meta:
+    name: Get meta information required for the build
+    uses: ./.github/workflows/call-get-metadata.yaml
+    permissions:
+      contents: read
+    with:
+      get-version-from-tag: true
+      use-full-linux-targets: false
+      ref: ${{ github.ref }}
+
+  build-image:
+    uses: ./.github/workflows/call-build-containers.yaml
+    needs:
+      - get-meta
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      nightly-build-info: ""
+      dockerhub-username: ${{ vars.DOCKERHUB_USERNAME }}
+    secrets:
+      dockerhub-token: ${{ secrets.DOCKERHUB_PUBLIC_READ_TOKEN }}
+      cosign_private_key: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      cosign_private_key_password: ${{ secrets.COSIGN_PASSWORD }}
+
+  build-linux:
+    uses: ./.github/workflows/call-build-linux-packages.yaml
+    needs:
+      - get-meta
+    permissions:
+      contents: read
+      packages: read
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      target-matrix: ${{ needs.get-meta.outputs.linux-targets }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
+      dockerhub-username: ${{ vars.DOCKERHUB_USERNAME }}
+    secrets:
+      dockerhub-token: ${{ secrets.DOCKERHUB_PUBLIC_READ_TOKEN }}
+
+  build-windows:
+    uses: ./.github/workflows/call-build-windows-packages.yaml
+    needs:
+      - get-meta
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
+
+  build-macos:
+    uses: ./.github/workflows/call-build-macos-packages.yaml
+    needs:
+      - get-meta
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.get-meta.outputs.version }}
+      ref: ${{ github.ref }}
+      nightly-build-info: ${{ needs.get-meta.outputs.date }}
+
+  copy-common-images:
+    name: Promote release images
+    needs:
+      - get-meta
+      - build-image
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/call-publish-release-images.yaml
+    with:
+      version: ${{ needs.build-image.outputs.version }}
+    secrets:
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create release
+    # Always run even if build jobs fail — we still want a release entry with whatever was built.
+    if: always()
+    needs:
+      - get-meta
+      - build-image
+      - build-linux
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      actions: read
+      contents: read
+      # We no longer need write permissions as we use a PAT due to https://github.com/softprops/action-gh-release/issues/411#issuecomment-4062182124
+      # contents: write
+      id-token: write
+    env:
+      UBI_IMAGE_NAME: ${{ needs.get-meta.outputs.ubi-image-base }}
+      DISTROLESS_IMAGE_NAME: ${{ needs.get-meta.outputs.debian-image-base }}
+      TAG: ${{ needs.build-image.outputs.version }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: ${{ env.STEP_SECURITY_EGRESS_POLICY }}
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        # We need full history to be able to detect branch ancestry
+        with:
+          fetch-depth: 0
+
+      - name: Log in to the Container registry
+        if: ${{ needs.build-image.result == 'success' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Authenticate with GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: "projects/841522437311/locations/global/workloadIdentityPools/github-actions/providers/github-actions"
+          service_account: "terraform-infra@infrastructure-464010.iam.gserviceaccount.com"
+
+      - name: Create output directory for parallel jobs to use
+        run: mkdir -p output
+        shell: bash
+
+      # Once https://github.com/rhysd/actionlint/issues/693 is resolved we should do these in parallel to speed up the release process.
+      # For now we do them sequentially to avoid actionlint errors.
+      - name: Sign packages
+        # Only sign if at least one package build produced artefacts
+        if: ${{ needs.build-linux.result == 'success' || needs.build-windows.result == 'success' || needs.build-macos.result == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/sign-packages
+
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        if: ${{ needs.build-image.result == 'success' }}
+        with:
+          image: ${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}
+          artifact-name: image-ubi-sbom.spdx
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          output-file: image-ubi-sbom.spdx
+
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        if: ${{ needs.build-image.result == 'success' }}
+        with:
+          image: ${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}
+          artifact-name: image-debian-sbom.spdx
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          output-file: image-debian-sbom.spdx
+
+      - name: Generate JSON schema from container
+        if: ${{ needs.build-image.result == 'success' }}
+        timeout-minutes: 1
+        # We don't want to fail the release if this fails since it's not critical and can be debugged after the fact if needed
+        continue-on-error: true
+        run: |
+          echo "Generating JSON schema from container image"
+          docker run --rm -t "${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}" -J > output/telemetry-forge-ubi-schema.json
+          docker run --rm -t "${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}" -J > output/telemetry-forge-debian-schema.json
+          # We use the UBI image schema as the main one since it has more metadata and we can link to the distroless one for reference
+          cp output/telemetry-forge-ubi-schema.json output/telemetry-forge-agent-schema.json
+        shell: bash
+
+      - name: Save image as tarball
+        if: ${{ needs.build-image.result == 'success' }}
+        run: |
+          skopeo copy \
+            --all \
+            --remove-signatures \
+            --src-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "docker://${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}" \
+            "oci-archive:output/telemetryforge-agent-container.tar"
+          skopeo copy \
+            --all \
+            --remove-signatures \
+            --src-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "docker://${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}" \
+            "oci-archive:output/telemetryforge-agent-container-slim.tar"
+          tar -czvf output/telemetryforge-agent-container.tar.gz output/telemetryforge-agent-container.tar output/telemetryforge-agent-container-slim.tar
+          rm -f output/telemetryforge-agent-container.tar output/telemetryforge-agent-container-slim.tar
+        shell: bash
+
+      - name: Construct release info
+        # Add target info and OSS version to new JSON file
+        run: |
+          jq '. += { "oss_version": "${{ needs.get-meta.outputs.oss-version }}"}' build-config.json | tee output/release.json
+        shell: bash
+
+      - name: Make nice Linux targets list
+        id: linux-targets
+        run: |
+          LINUX_TARGETS=$(echo '${{ needs.get-meta.outputs.linux-targets }}' | jq -r '. | join(", ")')
+          echo "linux-targets=$LINUX_TARGETS"
+          echo "linux-targets=$LINUX_TARGETS" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Check if commit is on default branch
+        id: check_branch
+        run: |
+          # Check if the current commit exists on the default branch
+          if git branch -r --contains ${{ github.sha }} | grep -q "origin/${{ github.event.repository.default_branch }}"; then
+            echo "is_default=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_default=false" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      # End of parallel block
+      # See https://github.com/rhysd/actionlint/issues/693
+
+      - name: Package into a single tarball
+        # Single tarball is used as uploading multiple artefacts is super flaky with Github Releases so this is a workaround
+        # Can fail if we have no packages built for any of the platforms, so we ignore errors here and just upload whatever we have
+        if: ${{ needs.build-linux.result == 'success' || needs.build-windows.result == 'success' || needs.build-macos.result == 'success' }}
+        continue-on-error: true
+        run: |
+          tar -czvf $GITHUB_WORKSPACE/deliverables.tar.gz -C output .
+        shell: bash
+
+      - name: Debug
+        if: always()
+        run: ls -lR
+        shell: bash
+
+      - id: get-secrets-release
+        name: Get secrets from GCP Secret Manager for release creation
+        # We need a custom PAT for creating a release on an older commit SHA
+        # https://github.com/softprops/action-gh-release/issues/411#issuecomment-4062182124
+        uses: "google-github-actions/get-secretmanager-secrets@bc9c54b29fdffb8a47776820a7d26e77b379d262" # v3.0.0
+        with:
+          secrets: |-
+            github-pat:projects/626836145334/secrets/GITHUB_CI_PAT
+
+      - name: Create release
+        # This may fail for workflow_dispatch if the release already exists
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          append_body: true
+          token: ${{ steps.get-secrets-release.outputs.github-pat }}
+          body: |
+            Telemetry Forge Agent release for ${{ github.ref_name }} version
+
+            Version: ${{ needs.get-meta.outputs.version }}
+            OSS Version: ${{ needs.get-meta.outputs.oss-version }}
+
+            Targets:
+              - Windows: 2022/2025
+              - Linux: ${{ steps.linux-targets.outputs.linux-targets }}
+
+            Images:
+              - ${{ env.UBI_IMAGE_NAME }}:${{ env.TAG }}
+              - ${{ env.DISTROLESS_IMAGE_NAME }}:${{ env.TAG }}
+          files: |
+            install.sh
+            *.spdx
+            output/*.json
+            deliverables.tar.gz
+            output/telemetryforge-agent-container.tar.gz
+            output/package-macos-*
+            output/package-windows-*
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          # Ensure we create from the appropriate ref for non-latest builds
+          # Use the commit SHA to ensure we create from the exact commit the tag points to
+          target_commitish: ${{ github.sha }}
+          # Only make the latest release if the commit exists on the default branch
+          make_latest: ${{ steps.check_branch.outputs.is_default == 'true' }}
+
+      - name: Upload packages to Google Cloud Storage
+        id: upload-packages
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        with:
+          path: output/
+          # We still use the old buckets from before our rename
+          destination: fluentdo-agent-release/${{ needs.get-meta.outputs.version }}/
+
+  update-docs:
+    # Always run
+    needs:
+      - get-meta
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    name: Update documentation on release
+    # latest commit, updated by cron-update-docs-workflow-pin.yaml
+    uses: telemetryforge/documentation/.github/workflows/call-add-mapping-version.yaml@22ab1e2f40c0c20b59beb1db70ce804b61b8b719 # main
+    with:
+      agent-version: ${{ needs.get-meta.outputs.version }}
+      oss-version: ${{ needs.get-meta.outputs.oss-version }}

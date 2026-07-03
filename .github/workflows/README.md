@@ -10,15 +10,26 @@ This directory contains the GitHub Actions workflows and reusable actions for th
   - [Table of Contents](#table-of-contents)
   - [Overview](#overview)
   - [Workflows](#workflows)
-    - [Build and Test](#build-and-test)
+    - [Filename Conventions](#filename-conventions)
+    - [PR Container Build and Test](#pr-container-build-and-test)
+    - [PR Package Build and Test](#pr-package-build-and-test)
+    - [PR Comment Build](#pr-comment-build)
+    - [Branch Build and Test](#branch-build-and-test)
+    - [Release](#release)
     - [Unit Tests](#unit-tests)
-    - [Lint](#lint)
-    - [Lint Packages](#lint-packages)
-    - [Test Specific Versions](#test-specific-versions)
+    - [Lint PRs](#lint-prs)
+    - [Lint Package PRs](#lint-package-prs)
+    - [Dependency Review](#dependency-review)
+    - [Scorecard Security](#scorecard-security)
     - [Auto Release](#auto-release)
-    - [Update Version](#update-version)
+    - [Update Docs Workflow Pin](#update-docs-workflow-pin)
+    - [Update Version on Release](#update-version-on-release)
+    - [LTS Branch Updates](#lts-branch-updates)
   - [Reusable Workflows](#reusable-workflows)
+    - [Get Build Metadata](#get-build-metadata)
+    - [Get Image Base Names](#get-image-base-names)
     - [Build Containers](#build-containers)
+    - [Build Single Architecture Container](#build-single-architecture-container)
     - [Build Linux Packages](#build-linux-packages)
     - [Build Windows Packages](#build-windows-packages)
     - [Build macOS Packages](#build-macos-packages)
@@ -27,6 +38,7 @@ This directory contains the GitHub Actions workflows and reusable actions for th
     - [Test Packages](#test-packages)
     - [Publish Release Images](#publish-release-images)
   - [Composite Actions](#composite-actions)
+    - [Sign Packages](#sign-packages)
     - [Get Package Name](#get-package-name)
   - [Workflow Diagrams](#workflow-diagrams)
     - [Main Build and Release Flow](#main-build-and-release-flow)
@@ -61,50 +73,157 @@ The CI/CD pipeline is designed to:
 
 ## Workflows
 
-### Build and Test
+### Filename Conventions
+
+Workflow filenames use a prefix to indicate when they run:
+
+| Prefix | When it runs | Example |
+|---|---|---|
+| `pr-` | Pull requests only | `pr-container-build.yaml`, `pr-package-build.yaml`, `pr-lint.yaml` |
+| `release-` | Version tag pushes (`v*`) only | `release-build.yaml` |
+| `cron-` | Scheduled automation and maintenance workflows | `cron-auto-release.yaml`, `cron-lts-update-branches.yaml` |
+| `call-` | Reusable workflows (called by other workflows) | `call-build-containers.yaml` |
+| _(none)_ | General purpose / mixed triggers | `build.yaml`, `unit-tests.yaml` |
+
+The main CI/CD pipeline is split across three workflow files based on trigger context, so that each only runs what is necessary:
+
+| Workflow | File | Trigger |
+|---|---|---|
+| PR Container Build and Test | [`pr-container-build.yaml`](./pr-container-build.yaml) | Pull requests (path-filtered) |
+| PR Package Build and Test | [`pr-package-build.yaml`](./pr-package-build.yaml) | Pull requests |
+| Branch Build and Test | [`build.yaml`](./build.yaml) | Push to `main`/`release/**`, manual dispatch |
+| Release | [`release-build.yaml`](./release-build.yaml) | Push of version tags (`v*`) |
+
+### PR Container Build And Test
+
+**File:** [`.github/workflows/pr-container-build.yaml`](./pr-container-build.yaml)
+
+**Triggers:**
+
+- Pull requests (opened, synchronize, reopened) with path filters
+- Paths include: `source/**`, `testing/**`, `config/**`, `patches/**`, `Dockerfile.*`, `build-config.json`, `cosign.pub`, `scripts/setup-code.sh`, and the nested reusable workflow files used by this workflow
+
+**Purpose:** Builds and tests container images for PR validation.
+
+**Jobs:**
+
+1. **get-meta** - Extracts metadata including version, build type, and target platforms
+2. **build-image** - Builds container images (UBI and Debian-based) for AMD64 PR validation
+3. **test-containers** - Runs container tests including BATS and Kubernetes tests
+4. **tests-complete** - Aggregates container test results
+
+**Key Features:**
+
+- Container images always built for every PR (AMD64 only, UBI and Debian variants)
+- Path-scoped triggering avoids runs for unrelated repository changes
+- Uses the full PR linux target matrix from `build-config.json`
+- Concurrency group cancels previous runs on new commits
+
+### PR Package Build And Test
+
+**File:** [`.github/workflows/pr-package-build.yaml`](./pr-package-build.yaml)
+
+**Triggers:**
+
+- Pull requests (opened, synchronize, reopened, labeled)
+
+**Purpose:** Builds and tests packages for PRs when package labels are present.
+
+**Jobs:**
+
+1. **get-meta** - Extracts metadata including version, build type, and target platforms
+2. **build-linux** - Builds Linux packages — only with `build-packages` or `build-linux` label
+3. **build-windows** - Builds Windows packages — only with `build-packages` or `build-windows` label
+4. **build-macos** - Builds macOS packages — only with `build-packages` or `build-macos` label
+5. **test-packages** - Tests Linux packages on target distributions (runs when Linux package build runs)
+6. **tests-complete** - Aggregates package build/test results
+
+**Key Features:**
+
+- Package builds are opt-in via PR labels (`build-packages`, `build-linux`, `build-windows`, `build-macos`)
+- Uses the full PR linux target matrix from `build-config.json`
+- Concurrency group cancels previous runs on new commits
+
+### PR Comment Build
+
+**File:** [`.github/workflows/pr-comment-build.yaml`](./pr-comment-build.yaml)
+
+**Triggers:**
+
+- Issue comments on pull requests
+
+**Purpose:** Allows maintainers to trigger targeted builds from a PR comment using `/build` directives without waiting for full CI.
+
+**Jobs:**
+
+1. **pr-build-comment** - Parses `/build` comment directives and computes requested build matrixes
+2. **get-metadata** - Extracts metadata (version, date, linux targets) for the PR merge ref
+3. **pr-build-containers** - Builds requested container architectures (`amd64`, `arm64`, `s390x`, or `all`)
+4. **pr-build-windows** - Builds Windows packages when requested
+5. **pr-build-macos** - Builds macOS packages when requested
+6. **pr-build-linux** - Builds Linux packages for requested distro targets (or full target set with `linux=all`)
+7. **test-packages** - Runs Linux package tests for the selected Linux build matrix
+8. **pr-build-comment-response** - Posts a summary comment with per-job status and links
+
+**Comment Syntax Examples:**
+
+- `/build container=arm64`
+- `/build container=arm64,s390x`
+- `/build container=all`
+- `/build linux=ubuntu/24.04,centos/9`
+- `/build linux=all`
+- `/build container=amd64 linux=all windows`
+
+### Branch Build and Test
 
 **File:** [`.github/workflows/build.yaml`](./build.yaml)
 
 **Triggers:**
 
-- Pull requests (opened, synchronize, reopened, labeled)
 - Push to `main` and `release/**` branches
-- Push of version tags (`v*`)
 - Manual workflow dispatch
 
-**Purpose:** Main CI/CD workflow that orchestrates building, testing, and releasing the Agent.
+**Purpose:** Full build and staging upload on every commit to main or release branches. Signs packages and uploads artefacts to GCS staging bucket.
 
 **Jobs:**
 
 1. **get-meta** - Extracts metadata including version, build type, and target platforms
 2. **build-image** - Builds multi-architecture container images (UBI and Debian-based)
-3. **build-linux** - Builds Linux packages (DEB, RPM) for various distributions
-4. **build-windows** - Builds Windows packages (EXE, MSI, ZIP)
-5. **build-macos** - Builds macOS packages (PKG) for Intel and Apple Silicon
+3. **build-linux** - Builds Linux packages for all release targets
+4. **build-windows** - Builds Windows packages
+5. **build-macos** - Builds macOS packages
+6. **test-containers** - Runs container tests including BATS and Kubernetes tests
+7. **test-packages** - Tests Linux packages on target distributions
+8. **staging-upload** - Signs packages (via `sign-packages` action) and uploads to GCS staging
+9. **tests-complete** - Aggregates test results (required by auto-release workflow)
+
+### Release
+
+**File:** [`.github/workflows/release-build.yaml`](./release-build.yaml)
+
+**Triggers:**
+
+- Push of version tags (`v*`)
+
+**Purpose:** Full release build: creates a signed GitHub release with artefacts, SBOMs, container tarballs, and promotes images. Updates documentation.
+
+**Jobs:**
+
+1. **get-meta** - Extracts metadata including version, build type, and target platforms
+2. **build-image** - Builds multi-architecture container images (UBI and Debian-based)
+3. **build-linux** - Builds Linux packages for all release targets
+4. **build-windows** - Builds Windows packages
+5. **build-macos** - Builds macOS packages
 6. **copy-common-images** - Promotes release images to standard locations
-7. **test-containers** - Runs container tests including BATS and Kubernetes tests
-8. **test-packages** - Tests Linux packages on target distributions
-9. **tests-complete** - Aggregates test results
-10. **release** - Creates GitHub releases with artifacts and SBOMs
-11. **update-docs** - Updates documentation with new version mappings
-12. **update-homebrew** - Updates Homebrew formula for macOS
-
-**Key Features:**
-
-- Conditional execution based on PR labels (`build-packages`, `build-linux`, `build-windows`, `build-macos`, `build-self-hosted`)
-- Support for self-hosted runners
-- Multi-architecture builds (AMD64, ARM64)
-- Signed container images using Cosign
-- SBOM generation for containers
-- Automated release creation for version tags
+7. **release** - Creates GitHub release with signed artefacts, SBOMs, and uploads to GCS
+8. **update-docs** - Updates documentation with new version mappings
 
 **Outputs:**
 
 - Container images pushed to `ghcr.io/telemetryforge/agent`
 - Linux packages (DEB, RPM)
 - Windows packages (EXE, MSI, ZIP)
-- macOS packages (PKG)
-- GitHub releases with all artifacts
+- GitHub release with all artefacts and SBOMs
 
 ### Unit Tests
 
@@ -112,8 +231,8 @@ The CI/CD pipeline is designed to:
 
 **Triggers:**
 
-- Pull requests to `main` and `release/**` branches (when source code changes)
-- Manual workflow dispatch
+- Push to `main` and `release/**`
+- Pull requests to `main` and `release/**` when `source/**` or the unit test workflow file changes
 
 **Purpose:** Runs comprehensive unit tests with sanitizers and generates code coverage reports.
 
@@ -123,7 +242,8 @@ The CI/CD pipeline is designed to:
 
 **Key Features:**
 
-- Multiple sanitizer configurations (address, undefined, memory, thread)
+- Default unit-test configurations: address sanitizer + undefined sanitizer, and coverage
+- Optional sanitizer configurations (memory, thread) are present in the workflow and can be re-enabled
 - Code coverage reporting using gcovr
 - Coverage reports in multiple formats (HTML, XML, JSON)
 - Runs on Namespace profile runners (4 vCPU, 8GB RAM)
@@ -135,9 +255,9 @@ The CI/CD pipeline is designed to:
 - Coverage reports (HTML, XML, JSON)
 - Test results
 
-### Lint
+### Lint PRs
 
-**File:** [`.github/workflows/lint.yaml`](./lint.yaml)
+**File:** [`.github/workflows/pr-lint.yaml`](./pr-lint.yaml)
 
 **Triggers:**
 
@@ -151,7 +271,10 @@ The CI/CD pipeline is designed to:
 1. **hadolint-pr** - Lints Dockerfiles using Hadolint
 2. **shellcheck-pr** - Lints shell scripts using Shellcheck
 3. **actionlint-pr** - Lints GitHub Actions workflows using Actionlint
-4. **prchecker-lint** - Validates PR title format (conventional commits)
+4. **workflow-file-format-pr** - Verifies workflow files are formatted
+5. **prchecker-lint** - Validates PR title format (conventional commits)
+6. **actions-pin-sha** - Checks workflow action pinning to SHAs
+7. **zizmor-lint** - Runs zizmor security linting for workflows
 
 **Key Features:**
 
@@ -161,9 +284,9 @@ The CI/CD pipeline is designed to:
 - Conventional commit enforcement for PR titles
 - Skips validation for Dependabot PRs
 
-### Lint Packages
+### Lint Package PRs
 
-**File:** [`.github/workflows/lint-packages.yaml`](./lint-packages.yaml)
+**File:** [`.github/workflows/pr-lint-packages.yaml`](./pr-lint-packages.yaml)
 
 **Triggers:**
 
@@ -184,28 +307,35 @@ The CI/CD pipeline is designed to:
 - Lists package contents and control files
 - Validates package dependencies
 
-### Test Specific Versions
+### Dependency Review
 
-**File:** [`.github/workflows/test.yaml`](./test.yaml)
+**File:** [`.github/workflows/pr-dependency-review.yml`](./pr-dependency-review.yml)
 
 **Triggers:**
 
-- Manual workflow dispatch only
+- Pull requests
 
-**Purpose:** Allows testing specific container image versions on-demand.
-
-**Inputs:**
-
-- `image` - Full image name (default: `ghcr.io/telemetryforge/agent`)
-- `image-tag` - Image tag to test (required)
-- `ref` - Repository reference to use (default: `main`)
+**Purpose:** Blocks pull requests that introduce high-severity vulnerable dependencies.
 
 **Jobs:**
 
-1. **get-meta** - Extracts Kubernetes versions for testing
-2. **test-containers** - Runs container tests using the reusable workflow
+1. **dependency-review** - Runs GitHub dependency review with PR summary comments
 
-**Use Case:** Testing released versions or specific builds without rebuilding.
+### Scorecard Security
+
+**File:** [`.github/workflows/scorecards.yml`](./scorecards.yml)
+
+**Triggers:**
+
+- Push to `main`
+- Weekly schedule (Tuesday 07:30 UTC)
+- Branch protection rule events
+
+**Purpose:** Runs OpenSSF Scorecard analysis and uploads SARIF results to GitHub code scanning.
+
+**Jobs:**
+
+1. **analysis** - Executes Scorecard checks, uploads SARIF artifact, and publishes code scanning results
 
 ### Auto Release
 
@@ -213,9 +343,9 @@ The CI/CD pipeline is designed to:
 
 **Triggers:**
 
-- Schedule: Mondays at 10:00 UTC (25.10 LTS releases)
-- Schedule: Mondays at 14:00 UTC (26.4 LTS releases)
-- Schedule: Tuesdays at 10:00 UTC (latest releases)
+- Schedule: 1st day of month at 14:00 UTC (25.10 LTS releases)
+- Schedule: 15th day of month at 14:00 UTC (26.4 LTS releases)
+- Schedule: Mondays at 10:00 UTC (latest releases)
 - Manual workflow dispatch
 
 **Purpose:** Automatically creates release tags based on the last successful build.
@@ -229,19 +359,47 @@ The CI/CD pipeline is designed to:
 
 - Automatic tag creation based on schedule
 - Different versioning for LTS (25.10.x) and mainline (vYY.M.W)
-- Finds last successful "Build and test" workflow run
+- Finds last successful "Branch Build and Test" workflow run
 - Validates tag doesn't already exist
 - Uses PAT to trigger downstream workflows
 - Dry-run support for testing
 
 **Tag Formats:**
 
-- LTS: `v25.10.x` (incremental patch version)
+- LTS: `v25.10.x` or `v26.4.x` (incremental patch version)
 - Mainline: `vYY.M.W` (year.month.week)
 
-### Update Version
+### Update Docs Workflow Pin
 
-**File:** [`.github/workflows/update-version.yaml`](./update-version.yaml)
+**File:** [`.github/workflows/cron-update-docs-workflow-pin.yaml`](./cron-update-docs-workflow-pin.yaml)
+
+**Triggers:**
+
+- Weekly schedule (Monday 06:00 UTC)
+- Manual workflow dispatch
+
+**Purpose:** Keeps the pinned reusable workflow SHA in `release-build.yaml` up to date with the latest commit on `telemetryforge/documentation` `main` branch, while still using immutable SHA pinning.
+
+**Jobs:**
+
+1. **update-docs-workflow-pin** - Resolves latest SHA, updates the pinned `uses:` reference if needed, and opens a PR
+
+**Key Features:**
+
+- Strict SHA pinning maintained in `release-build.yaml`
+- Automatic upstream main-branch SHA resolution via GitHub API
+- No-op safe updates (no PR when there is no file diff)
+- `dry-run` option for manual validation without PR creation
+- Pin resolution/update logic is implemented in `scripts/update-docs-workflow-pin.sh` for local verification
+
+**Local verification:**
+
+- `./scripts/update-docs-workflow-pin.sh`
+- `TARGET_WORKFLOW=.github/workflows/release-build.yaml ./scripts/update-docs-workflow-pin.sh`
+
+### Update Version on Release
+
+**File:** [`.github/workflows/release-update-version.yaml`](./release-update-version.yaml)
 
 **Triggers:**
 
@@ -267,7 +425,104 @@ The CI/CD pipeline is designed to:
 - LTS tags (`v25.10.x`): Increments patch version
 - Mainline: Calculates next week's version (`vYY.M.W`)
 
+### LTS Branch Updates
+
+**File:** [`.github/workflows/cron-lts-update-branches.yaml`](./cron-lts-update-branches.yaml)
+
+**Triggers:**
+
+- Weekly schedule (Sunday 00:00 UTC)
+- Manual workflow dispatch
+
+**Purpose:** Automatically propagates `.github/` workflow and action changes from `main` into LTS release branches by opening a PR against each branch.
+
+**Jobs:**
+
+1. **lts-branch-updates** - Opens a PR against each LTS branch with changes from `main`
+
+**Key Features:**
+
+- Targets all active LTS branches (e.g. `release/25.10-lts`)
+- Dry-run support for testing
+- Scheduled updates reduce churn from frequent dependency and workflow-action updates
+
 ## Reusable Workflows
+
+### Get Build Metadata
+
+**File:** [`.github/workflows/call-get-metadata.yaml`](./call-get-metadata.yaml)
+
+**Purpose:** Extracts build metadata (version, date, linux targets, OSS version) required for builds. Handles differences between PR builds, staging builds, and releases.
+
+**Inputs:**
+
+- `ref` - The commit, SHA, or branch to use in this repository. Default: `main`
+- `get-version-from-tag` - If true, extract version from git tag (for releases); if false, from Dockerfile (for PRs/staging). Default: `false`
+- `use-full-linux-targets` - If true, use `.linux_targets` from build-config.json (for PR builds); if false, use `.release.linux_targets` (for staging/releases). Default: `true`
+
+**Jobs:**
+
+1. **get-metadata** - Extracts metadata from repository files
+
+**Outputs:**
+
+- `date` - Nightly build date/timestamp (always generated as `YYYY-MM-DD-HH_MM_SS` format)
+- `linux-targets` - JSON array of Linux build targets (full set for PRs, reduced set for staging/releases)
+- `version` - The build version (from Dockerfile or git tag)
+- `oss-version` - The OSS (Fluent Bit) version from source/oss_version.txt
+- `ubi-image-base` - Canonical UBI image base (`ghcr.io/telemetryforge/agent/ubi`)
+- `debian-image-base` - Canonical Debian image base (`ghcr.io/telemetryforge/agent/debian`)
+
+### Get Image Base Names
+
+**File:** [`.github/workflows/call-get-image-base-names.yaml`](./call-get-image-base-names.yaml)
+
+**Purpose:** Provides canonical UBI and Debian image base names as reusable outputs.
+
+**Inputs:**
+
+- None
+
+**Jobs:**
+
+1. **get-image-bases** - Exposes canonical image base names for downstream workflows
+
+**Outputs:**
+
+- `ubi-image-base` - Canonical UBI image base (`ghcr.io/telemetryforge/agent/ubi`)
+- `debian-image-base` - Canonical Debian image base (`ghcr.io/telemetryforge/agent/debian`)
+
+**Usage Examples:**
+
+PR builds (full targets, version from Dockerfile):
+```yaml
+get-metadata:
+  uses: ./.github/workflows/call-get-metadata.yaml
+  with:
+    ref: ${{ github.ref }}
+    get-version-from-tag: false
+    use-full-linux-targets: true
+```
+
+Staging builds (release targets, version from Dockerfile):
+```yaml
+get-metadata:
+  uses: ./.github/workflows/call-get-metadata.yaml
+  with:
+    ref: ${{ github.ref }}
+    get-version-from-tag: false
+    use-full-linux-targets: false
+```
+
+Release builds (release targets, version from git tag):
+```yaml
+get-metadata:
+  uses: ./.github/workflows/call-get-metadata.yaml
+  with:
+    ref: ${{ github.ref }}
+    get-version-from-tag: true
+    use-full-linux-targets: false
+```
 
 ### Build Containers
 
@@ -279,11 +534,9 @@ The CI/CD pipeline is designed to:
 
 - `version` - Version to build
 - `ref` - Git reference to checkout
-- `image-base` - Base image name
-- `definition` - Dockerfile to use
 - `dockerhub-username` - Docker Hub username for pulls
-- `amd-runner-label` - Runner label for AMD64 builds
-- `arm-runner-label` - Runner label for ARM64 builds
+- `platforms` - JSON platform list (for example `['amd64']` in PR builds, full set elsewhere)
+- `nightly-build-info` - Nightly build metadata string
 
 **Secrets:**
 
@@ -293,23 +546,77 @@ The CI/CD pipeline is designed to:
 
 **Jobs:**
 
-1. **build-single-arch-container-images** - Builds images for each architecture/target
-2. **build-container-image-manifest** - Creates multi-arch manifests
-3. **build-container-images-sign** - Signs images with Cosign
+1. **resolve-image-bases** - Resolves canonical UBI and Debian image base names via `call-get-image-base-names.yaml`
+2. **build-ubi-single-arch-container-images** - Matrix-calls single-arch builds for UBI across selected platforms
+3. **build-debian-single-arch-container-images** - Matrix-calls single-arch builds for Debian across selected platforms
+4. **build-ubi-container-image-manifest-and-sign** - Invokes reusable manifest+sign workflow for UBI image
+5. **build-debian-container-image-manifest-and-sign** - Invokes reusable manifest+sign workflow for Debian image
 
 **Outputs:**
 
-- `tag` - Full image name and tag
-- `image` - Image name
-- `version` - Container version
+- `version` - Resolved container image version tag from `docker/metadata-action` (event-aware and tag-prefix safe)
 
 **Key Features:**
 
-- Multi-architecture support (AMD64, ARM64)
-- Multiple targets (production, test)
+- Multi-architecture support (AMD64, ARM64, s390x)
+- Canonical image base names sourced from metadata outputs
+- Separate UBI and Debian build chains so each manifest/sign job depends only on its own image digests
+- Explicit per-image manifest/sign calls (no matrix in orchestration layer)
 - Image signing with Cosign (key-based and OIDC)
 - Digest-based manifest creation
 - Test image for BATS tests (AMD64 only)
+
+### Build Container Manifest And Sign
+
+**File:** [`.github/workflows/call-build-container-manifest-and-sign.yaml`](./call-build-container-manifest-and-sign.yaml)
+
+**Purpose:** Reusable per-image manifest creation and signing workflow.
+
+**Inputs:**
+
+- `image-base` - Full image base name (`ghcr.io/telemetryforge/agent/ubi` or `ghcr.io/telemetryforge/agent/debian`)
+
+**Secrets:**
+
+- `cosign_private_key` - Cosign signing key
+- `cosign_private_key_password` - Cosign key password
+
+**Jobs:**
+
+1. **build-container-images-manifest** - Creates and publishes multi-arch image manifest and resolves metadata version
+2. **build-container-images-sign** - Signs the published image manifest (key and OIDC)
+
+**Outputs:**
+
+- `version` - Resolved container image version tag from `docker/metadata-action`
+
+### Build Single Architecture Container
+
+**File:** [`.github/workflows/call-build-container-single-arch.yaml`](./call-build-container-single-arch.yaml)
+
+**Purpose:** Reusable per-platform container build used by `call-build-containers.yaml`.
+
+**Inputs:**
+
+- `version` - Version to build
+- `ref` - Git reference to checkout
+- `image-base` - Target base image name
+- `definition` - Dockerfile to use
+- `platform` - Target architecture (`amd64`, `arm64`, or `s390x`)
+- `dockerhub-username` - Docker Hub username for pulls
+- `nightly-build-info` - Nightly build metadata string
+
+**Secrets:**
+
+- `dockerhub-token` - Docker Hub token
+
+**Jobs:**
+
+1. **build-single-arch** - Builds and pushes production image digest; builds test image for AMD64
+
+**Outputs:**
+
+- `digest` - Production image digest
 
 ### Build Linux Packages
 
@@ -324,9 +631,6 @@ The CI/CD pipeline is designed to:
 - `ref` - Git reference to checkout
 - `nightly-build-info` - Nightly build information
 - `dockerhub-username` - Docker Hub username
-- `amd-runner-label` - Runner label for AMD64
-- `arm-runner-label` - Runner label for ARM64
-- `large-amd-runner-label` - Runner label for resource-intensive builds
 
 **Secrets:**
 
@@ -501,7 +805,6 @@ The CI/CD pipeline is designed to:
 - `version` - Version to test
 - `ref` - Repository reference
 - `dockerhub-username` - Docker Hub username
-- `amd-runner-label` - Runner label
 
 **Secrets:**
 
@@ -557,8 +860,24 @@ The CI/CD pipeline is designed to:
 
 ## Composite Actions
 
-### Get Package Name
+### Sign Packages
 
+**File:** [`.github/actions/sign-packages/action.yml`](.github/actions/sign-packages/action.yml)
+
+**Purpose:** Downloads build artefacts, filters development headers/extras, authenticates with GCP, retrieves the GPG key from Secret Manager, and signs all packages. Signed packages are left in `./output/` for the calling job to continue with.
+
+Used by the `staging-upload` job in `build.yaml` and the `release` job in `release-build.yaml`.
+
+**Steps performed:**
+1. Download `*package*` artifacts into `output/`
+2. Filter out header and extra packages (`.rpm`, `.deb` variants)
+3. Install signing tools (`createrepo-c`, `rpm`, `debsigs`, `coreutils`)
+4. Authenticate with GCP via OIDC
+5. Retrieve GPG key and passphrase from GCP Secret Manager
+6. Import GPG key
+7. Run `./scripts/sign-packages.sh`
+
+### Get Package Name
 **File:** [`.github/actions/get-package-name/action.yml`](.github/actions/get-package-name/action.yml)
 
 **Purpose:** Converts distribution names to standardized package artifact names.
@@ -590,166 +909,160 @@ The CI/CD pipeline is designed to:
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer
-    participant GH as GitHub
-    participant Meta as get-meta
-    participant Build as Build Jobs
-    participant Test as Test Jobs
-    participant Release as Release Job
-    participant Registry as Container Registry
-    participant Docs as Documentation
-    participant Brew as Homebrew
+  participant PR as pull_request
+  participant Push as push(main/release/**)
+  participant Tag as push(v*)
+  participant PRContainer as pr-container-build.yaml
+  participant PRPackage as pr-package-build.yaml
+  participant BranchBuild as build.yaml
+  participant RelBuild as release-build.yaml
+  participant Registry as GHCR
+  participant GCS as GCS Buckets
+  participant Docs as External Docs Workflow
 
-    Dev->>GH: Push tag v1.2.3
-    GH->>Meta: Extract metadata
-    Meta->>Meta: Determine version, targets
-    Meta-->>Build: Provide build config
-    
-    par Build Container Images
-        Build->>Build: Build AMD64 images
-        Build->>Build: Build ARM64 images
-        Build->>Build: Create manifests
-        Build->>Build: Sign with Cosign
-        Build->>Registry: Push images
-    and Build Linux Packages
-        Build->>Build: Build DEB packages
-        Build->>Build: Build RPM packages
-        Build->>GH: Upload artifacts
-    and Build Windows Packages
-        Build->>Build: Build EXE/MSI/ZIP
-        Build->>GH: Upload artifacts
-    and Build macOS Packages
-        Build->>Build: Build PKG (Intel)
-        Build->>Build: Build PKG (Apple)
-        Build->>GH: Upload artifacts
+  alt PR validation context
+    PR->>PRContainer: Trigger container PR pipeline
+    PRContainer->>PRContainer: get-meta (full linux targets)
+    PRContainer->>PRContainer: build-image (platforms=[amd64], UBI+Debian)
+    PRContainer->>Registry: Push PR container images
+    PRContainer->>PRContainer: test-containers (UBI+Debian)
+    PRContainer->>PRContainer: tests-complete
+    opt PR labels request package builds
+      PR->>PRPackage: Trigger package PR pipeline
+      PRPackage->>PRPackage: get-meta (full linux targets)
+      PRPackage->>PRPackage: build-linux / build-windows / build-macos
+      PRPackage->>PRPackage: test-packages
+      PRPackage->>PRPackage: tests-complete
     end
-    
-    Build-->>Test: Trigger tests
-    
-    par Test Containers
-        Test->>Test: BATS tests
-        Test->>Test: Verify signatures
-        Test->>Test: K8s tests (multiple versions)
-        Test->>Test: Red Hat certification
-    and Test Packages
-        Test->>Test: Functional tests
-        Test->>Test: Integration tests
-    end
-    
-    Test-->>Release: All tests pass
-    
-    Release->>Registry: Pull images
-    Release->>Release: Generate SBOMs
-    Release->>Release: Create tarball
-    Release->>GH: Create GitHub release
-    Release->>GH: Upload artifacts
-    
-    alt Version tag on main branch
-        Release->>Docs: Update documentation
-        Release->>Brew: Update Homebrew formula
-    end
+  else Branch staging context
+    Push->>BranchBuild: Trigger branch pipeline
+    BranchBuild->>BranchBuild: get-meta (release linux targets)
+    BranchBuild->>BranchBuild: build-image (default platforms)
+    BranchBuild->>Registry: Push signed multi-arch images
+    BranchBuild->>BranchBuild: build-linux + build-windows + build-macos
+    BranchBuild->>BranchBuild: test-containers + test-packages
+    BranchBuild->>BranchBuild: staging-upload (sign packages)
+    BranchBuild->>GCS: Upload staging artifacts
+    BranchBuild->>BranchBuild: tests-complete
+  else Tagged release context
+    Tag->>RelBuild: Trigger release pipeline
+    RelBuild->>RelBuild: get-meta (version from tag)
+    RelBuild->>RelBuild: build-image + build-linux + build-windows + build-macos
+    RelBuild->>Registry: copy-common-images
+    RelBuild->>RelBuild: release job (SBOM, schema, tarballs, signing)
+    RelBuild->>GCS: Upload release artifacts
+    RelBuild->>Docs: update-docs
+  end
 ```
 
 ### Container Build Flow
 
 ```mermaid
 sequenceDiagram
-    participant Caller as Calling Workflow
-    participant Build as build-single-arch
-    participant Manifest as build-manifest
-    participant Sign as sign-images
+  participant Caller as Calling Workflow
+  participant Multi as call-build-containers
+  participant Meta as call-get-metadata
+  participant SingleUBI as call-build-container-single-arch (UBI)
+  participant SingleDeb as call-build-container-single-arch (Debian)
+  participant PerImage as call-build-container-manifest-and-sign
     participant Registry as GHCR
 
-    Caller->>Build: Start build (AMD64, ARM64)
-    
-    par AMD64 Build
-        Build->>Build: Build production image
-        Build->>Build: Build test image (AMD64 only)
-        Build->>Build: Export digest
-        Build->>Registry: Push by digest
-    and ARM64 Build
-        Build->>Build: Build production image
-        Build->>Build: Export digest
-        Build->>Registry: Push by digest
+  Caller->>Multi: with version/ref/platforms/nightly-build-info
+  Multi->>Meta: Resolve canonical image base names
+
+  par For each UBI platform
+    Multi->>SingleUBI: Invoke single-arch reusable workflow
+    SingleUBI->>SingleUBI: Build production image by digest
+    alt platform == amd64
+      SingleUBI->>SingleUBI: Build amd64 test image
     end
-    
-    Build->>Manifest: Upload digests
-    Manifest->>Manifest: Download all digests
-    Manifest->>Manifest: Create multi-arch manifest
-    Manifest->>Registry: Push manifest
-    
-    Manifest->>Sign: Trigger signing
-    Sign->>Sign: Sign with Cosign key
-    Sign->>Sign: Sign with OIDC
-    Sign->>Registry: Push signatures
+    SingleUBI->>Registry: Push image digest(s)
+    SingleUBI-->>Multi: Upload digest artifact
+  and For each Debian platform
+    Multi->>SingleDeb: Invoke single-arch reusable workflow
+    SingleDeb->>SingleDeb: Build production image by digest
+    alt platform == amd64
+      SingleDeb->>SingleDeb: Build amd64 test image
+    end
+    SingleDeb->>Registry: Push image digest(s)
+    SingleDeb-->>Multi: Upload digest artifact
+  end
+
+    Multi->>PerImage: Invoke for UBI image
+    PerImage->>PerImage: Build and push UBI manifest
+    PerImage->>PerImage: Sign UBI manifest
+    Multi->>PerImage: Invoke for Debian image
+    PerImage->>PerImage: Build and push Debian manifest
+    PerImage->>PerImage: Sign Debian manifest
+    PerImage->>Registry: Push manifests and signatures
 ```
 
 ### Package Build and Test Flow
 
 ```mermaid
 sequenceDiagram
-    participant Caller as Calling Workflow
-    participant Build as build-packages
-    participant Meta as test-get-meta
-    participant Functional as test-functional
-    participant Integration as test-integration
-    participant GH as GitHub Artifacts
+  participant PR as pr-build/pr-comment-build
+  participant Branch as build.yaml
+  participant Release as release-build.yaml
+  participant BuildLinux as call-build-linux-packages
+  participant TestPkgs as call-test-packages
+  participant Artifacts as GitHub Artifacts
 
-    Caller->>Build: Start package build
-    
-    par Build for Each Distro
-        Build->>Build: Setup build environment
-        Build->>Build: Build DEB/RPM
-        Build->>GH: Upload package artifact
-    end
-    
-    Build->>Meta: Trigger tests
-    Meta->>Meta: Convert build matrix
-    Meta->>Meta: Verify Docker images
-    Meta-->>Functional: Provide test matrix
-    
-    par Functional Tests
-        Functional->>GH: Download packages
-        Functional->>Functional: Build test container
-        Functional->>Functional: Run BATS tests
-    and Integration Tests
-        Integration->>GH: Download packages
-        Integration->>Integration: Install on target OS
-        Integration->>Integration: Run BATS tests
-    end
+  alt PR label or PR comment requests linux packages
+    PR->>BuildLinux: Build requested linux targets
+    BuildLinux->>Artifacts: Upload package artifacts
+    PR->>TestPkgs: Test same linux target matrix
+    TestPkgs->>Artifacts: Download artifacts
+    TestPkgs->>TestPkgs: Functional + integration tests
+  else Branch build context
+    Branch->>BuildLinux: Build release linux targets
+    BuildLinux->>Artifacts: Upload package artifacts
+    Branch->>TestPkgs: Test release linux target matrix
+  else Tagged release context
+    BranchBuild->>BranchBuild: build-linux + build-windows + build-macos
+    BuildLinux->>Artifacts: Upload package artifacts
+    Note over Release,TestPkgs: release-build.yaml does not run package tests
+  end
 ```
 
 ### Auto Release Flow
 
-```mermaid
+    RelBuild->>RelBuild: build-image + build-linux + build-windows + build-macos
 sequenceDiagram
     participant Cron as Scheduled Trigger
+  participant Manual as workflow_dispatch
     participant Find as find-last-good
     participant Tag as create-tag
     participant GH as GitHub
     participant Build as Build Workflow
 
-    Cron->>Find: Trigger (Monday/Tuesday)
-    Find->>Find: Determine branch (25.10-lts or main)
+  alt Scheduled run
+    Cron->>Find: 1st day 14:00 / 15th day 14:00 / Mondays 10:00
+    Find->>Find: Select branch+prefix from schedule
+  else Manual run
+    Manual->>Find: branch + tag-prefix + dry-run
+  end
+
     Find->>GH: Query workflow runs
+  Find->>Find: Workflow=Branch Build and Test, Job=All tests complete
     Find->>Find: Find last successful build
     Find-->>Tag: Provide commit SHA
-    
+
     Tag->>GH: Checkout commit
-    Tag->>Tag: Calculate next version
-    
-    alt LTS Release (Monday)
-        Tag->>Tag: Increment patch (v25.10.x)
-    else Mainline Release (Tuesday)
-        Tag->>Tag: Calculate vYY.M.W
+  alt branch != main
+    Tag->>Tag: Compute next incremental LTS tag
+  else branch == main
+    Tag->>Tag: Compute date-based mainline tag vYY.M.W
     end
-    
+
     Tag->>GH: Check if tag exists
-    
+
     alt Tag doesn't exist
         Tag->>GH: Create tag
-        Tag->>GH: Push tag (with PAT)
-        GH->>Build: Trigger build workflow
+    opt dry-run is false
+      Tag->>GH: Push tag (PAT)
+      GH->>Build: Trigger release workflows
+    end
     else Tag exists
         Tag->>Tag: Exit (no action)
     end
@@ -760,80 +1073,84 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Caller as Calling Workflow
-    participant Meta as get-meta
-    participant BATS as test-bats
-    participant Sig as test-signatures
-    participant RH as test-redhat
-    participant K8s as test-kubernetes
-    participant Complete as test-complete
+  participant Meta as get-meta
+  participant BATS as test-bats-container
+  participant Sig as test-verify-signatures
+  participant RH as test-redhat-certification
+  participant K8s as test-kubernetes(matrix)
+  participant K8sCall as call-test-containers-k8s
+  participant Complete as test-complete
 
-    Caller->>Meta: Extract K8s versions
-    Meta-->>BATS: Provide config
-    
-    par Container Tests
-        BATS->>BATS: Pull test image
-        BATS->>BATS: Run BATS functional tests
-        BATS->>BATS: Run integration tests
-    and Signature Verification
-        Sig->>Sig: Setup Cosign
-        Sig->>Sig: Verify image signature
-    and Red Hat Certification
-        alt UBI Image
-            RH->>RH: Setup Preflight
-            RH->>RH: Run certification checks
-            RH->>RH: Validate results
-        end
-    and Kubernetes Tests
-        K8s->>K8s: Create Kind cluster (v1.x)
-        K8s->>K8s: Setup Helm/kubectl
-        K8s->>K8s: Run integration tests
-        K8s->>K8s: Create Kind cluster (v1.y)
-        K8s->>K8s: Run integration tests
+  Caller->>Meta: Read kind_versions from build-config.json
+
+  par BATS and integration tests
+    Meta->>BATS: start
+    BATS->>BATS: Pull image/test variant
+    BATS->>BATS: Run BATS functional+integration tests
+  and Signature verification
+    Meta->>Sig: start
+    Sig->>Sig: Verify Cosign signatures
+  and Red Hat certification
+    alt image contains '/ubi'
+      Meta->>RH: start
+      RH->>RH: Run preflight certification checks
+    else non-UBI image
+      RH->>RH: Skipped
     end
-    
-    BATS-->>Complete: Test results
-    Sig-->>Complete: Verification results
-    RH-->>Complete: Certification results
-    K8s-->>Complete: K8s test results
-    
-    Complete->>Complete: Aggregate results
-    Complete->>Complete: Check all passed
+  and Kubernetes matrix tests
+    Meta->>K8s: start matrix(kind_versions)
+    K8s->>K8sCall: invoke reusable k8s test workflow
+    K8sCall->>K8sCall: Create kind cluster + run tests
+  end
+
+  BATS-->>Complete: result
+  Sig-->>Complete: result
+  RH-->>Complete: result
+  K8s-->>Complete: result
+  Complete->>Complete: Aggregate with alls-green
 ```
 
 ### Version Update Flow
 
 ```mermaid
 sequenceDiagram
-    participant Tag as Tag Push
+  participant Tag as push(v*)
+  participant Manual as workflow_dispatch
     participant Update as update-version
     participant GCP as GCP Secrets
     participant GH as GitHub
     participant PR as Pull Request
 
+  alt Tag-triggered run
     Tag->>Update: Trigger on v* tag
+  else Manual run
+    Manual->>Update: Trigger with new-tag/base-branch/dry-run
+  end
+
     Update->>Update: Checkout code
-    Update->>Update: Determine version type
-    
-    alt LTS Tag (v25.10.x)
-        Update->>Update: Increment patch version
-        Update->>Update: Set base branch (release/25.10-lts)
-    else Mainline Tag
-        Update->>Update: Calculate next week version
-        Update->>Update: Set base branch (main)
+  alt Manual run
+    Update->>Update: Use provided new-tag and base-branch
+  else LTS tag (v25.10.x or v26.4.x)
+    Update->>Update: Increment patch version
+    Update->>Update: Set base branch release/x.y-lts
+  else Mainline tag
+    Update->>Update: Calculate next calendar week version
+    Update->>Update: Set base branch main
     end
-    
+
     Update->>Update: Run update-version.sh
     Update->>Update: Apply version changes
-    
+
     Update->>GCP: Authenticate
     Update->>GCP: Get GitHub PAT
-    
+
+  opt not dry-run
     Update->>PR: Create PR with changes
     PR->>PR: Add ci, automerge labels
     Update->>GH: Enable auto-merge
-    
     GH->>GH: CI checks pass
     GH->>GH: Auto-merge PR
+  end
 ```
 
 ## Configuration Files
@@ -884,16 +1201,24 @@ Common environment variables used across workflows:
 
 ## Runner Labels
 
+Runner selection for reusable workflows is centralized inside the reusable workflow definitions via repository variables. Callers do not pass runner-label inputs.
+
 The workflows support different runner types:
 
 - `ubuntu-latest` - Standard GitHub-hosted runners
 - `namespace-profile-ubuntu-latest` - Namespace runners (4 vCPU, 8GB RAM)
 - `namespace-profile-ubuntu-latest-4cpu-16gb` - Larger Namespace runners
 - `namespace-profile-ubuntu-latest-arm` - ARM64 Namespace runners
-- `self-ubuntu-latest` - Self-hosted runners (when labeled)
 - `macos-15` - macOS Apple Silicon
 - `macos-15-intel` - macOS Intel
 - `windows-2025` - Windows Server 2025
+
+Reusable workflows derive Linux runner labels from these repository variables:
+
+- `vars.LINUX_AMD_RUNNER` (default: `namespace-profile-ubuntu-latest`)
+- `vars.LINUX_AMD_LARGE_RUNNER` (default: `namespace-profile-ubuntu-latest-4cpu-16gb`)
+- `vars.LINUX_ARM_RUNNER` (default: `namespace-profile-ubuntu-latest-arm`)
+- `vars.LINUX_S390X_RUNNER` (default: `ubuntu-24.04-s390x`)
 
 ## Secrets
 
@@ -913,7 +1238,6 @@ Required secrets for workflows:
    - `build-linux` - Build Linux packages only
    - `build-windows` - Build Windows packages only
    - `build-macos` - Build macOS packages only
-   - `build-self-hosted` - Use self-hosted runners
 
 2. **Testing** - All changes should pass:
    - Unit tests with sanitizers
@@ -931,8 +1255,12 @@ Required secrets for workflows:
    - Update documentation
 
 4. **Versioning**:
-   - LTS: `v25.10.x` (incremental)
+   - LTS: `v25.10.x`, `v26.4.x` (incremental)
    - Mainline: `vYY.M.W` (year.month.week)
+
+5. **Reusable Workflow Permissions**:
+  - Jobs that call reusable workflows should set explicit `permissions` matching the called workflow requirements (for example `packages: write` and `id-token: write` for container build/sign paths).
+  - Do not rely on implicit defaults for reusable calls.
 
 ## Troubleshooting
 
@@ -972,5 +1300,5 @@ When adding new workflows:
 For issues or questions:
 
 - GitHub Issues: <https://github.com/telemetryforge/agent/issues>
-- Documentation: <https://telemetryforge.io>
+- Documentation: <https://docs.telemetryforge.io>
 - Email: <info@telemetryforge.io>

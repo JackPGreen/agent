@@ -26,21 +26,6 @@ on:
         required: false
         type: string
         default: ""
-      amd-runner-label:
-        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
-        required: false
-        type: string
-        default: "namespace-profile-ubuntu-latest"
-      arm-runner-label:
-        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
-        required: false
-        type: string
-        default: "namespace-profile-ubuntu-latest-arm"
-      large-amd-runner-label:
-        description: The label to use for the runner (if not specified then the default ubuntu-latest or equivalent is used).
-        required: false
-        type: string
-        default: "namespace-profile-ubuntu-latest-4cpu-16gb"
     secrets:
       gpg_private_key:
         description: The optional GPG key to use for signing the packages.
@@ -62,7 +47,8 @@ permissions:
 jobs:
   build-packages:
     name: agent - ${{ matrix.distro }} package build and upload
-    runs-on: ${{ (contains(matrix.distro, 'arm') && inputs.arm-runner-label) || (contains(matrix.distro, 'centos/6') && inputs.large-amd-runner-label) || inputs.amd-runner-label }}
+    # Pick runner based on distro - override via repo variables to switch runner pools without workflow changes, otherwise defaults are used
+    runs-on: ${{ (contains(matrix.distro, 'arm') && (vars.LINUX_ARM_RUNNER || 'namespace-profile-ubuntu-latest-arm')) || (contains(matrix.distro, 'centos/6') && (vars.LINUX_AMD_LARGE_RUNNER || 'namespace-profile-ubuntu-latest-4cpu-16gb')) || (vars.LINUX_AMD_RUNNER || 'namespace-profile-ubuntu-latest') }}
     timeout-minutes: 60
     permissions:
       contents: read
